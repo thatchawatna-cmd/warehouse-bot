@@ -5,9 +5,56 @@ const app = express();
 app.use(express.json());
 
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1ug-1X3TFwNXeobmcfoohRqqudTcuyYfiagxhoWtPJLg';
 const SHEET_NAME = process.env.SHEET_NAME || 'Warehouse Airport&7-11 media';
+
+// ============================================================
+// KEYWORD MAPPING — คำที่ user พิมพ์ → keyword ที่ใช้ค้นหาใน sheet
+// เพิ่มได้เรื่อยๆ ตามที่ต้องการครับ
+// ============================================================
+const KEYWORD_MAP = [
+  // จอ
+  { triggers: ['จอ', 'lfd', 'screen', 'monitor', 'display'], searchIn: ['LFD'] },
+  { triggers: ['จอ 37', '37"', '37 นิ้ว', '37นิ้ว'], searchIn: ['LFD', '37'] },
+  { triggers: ['จอ 40', '40"', '40 นิ้ว', '40นิ้ว'], searchIn: ['LFD', '40'] },
+  { triggers: ['จอ 43', '43"', '43 นิ้ว', '43นิ้ว'], searchIn: ['LFD', '43'] },
+  { triggers: ['จอ 46', '46"', '46 นิ้ว', '46นิ้ว'], searchIn: ['LFD', '46'] },
+  { triggers: ['จอ 55', '55"', '55 นิ้ว', '55นิ้ว'], searchIn: ['LFD', '55'] },
+  { triggers: ['จอ hkc', 'hkc'], searchIn: ['LFD HKC'] },
+  { triggers: ['จอ samsung', 'samsung', 'ซัมซุง'], searchIn: ['LFD Samsung'] },
+  // Media Player
+  { triggers: ['player', 'media player', 'เพลเยอร์', 'เครื่องเล่น'], searchIn: ['Player', 'Media'] },
+  // อุปกรณ์ไฟฟ้า
+  { triggers: ['cb ', 'เซอร์กิต', 'เบรกเกอร์'], searchIn: ['CB '] },
+  { triggers: ['rcbo'], searchIn: ['RCBO'] },
+  { triggers: ['timer', 'ไทม์เมอร์', 'ไทเมอร์'], searchIn: ['Timer'] },
+  { triggers: ['ปลั๊ก', 'plug'], searchIn: ['Plug', 'ปลั๊ก', 'รางปลั๊ก'] },
+  { triggers: ['ลำโพง', 'speaker'], searchIn: ['ลำโพง'] },
+  { triggers: ['usb', 'ชาร์จ'], searchIn: ['USB', 'Charger'] },
+  // โครงสร้าง
+  { triggers: ['โครง', 'แร็ค', 'rack', 'bracket', 'ขาเหล็ก'], searchIn: ['โครงสร้าง', 'Bracket', 'ขาเหล็ก'] },
+  { triggers: ['magnetic', 'แมกเนติก'], searchIn: ['Magnetic'] },
+  // เครื่องมือ
+  { triggers: ['ไขควง', 'screwdriver'], searchIn: ['ไขควง'] },
+  { triggers: ['คัตเตอร์', 'cutter'], searchIn: ['คัตเตอร์'] },
+  { triggers: ['คลิปแอมป์', 'แคลมป์มิเตอร์'], searchIn: ['คลิปแอมป์'] },
+  { triggers: ['บันได', 'ladder'], searchIn: ['บันได'] },
+  { triggers: ['ไฟฉาย', 'torch', 'flashlight'], searchIn: ['ไฟฉาย'] },
+  { triggers: ['คีม', 'plier'], searchIn: ['คีม'] },
+  // วัสดุสิ้นเปลือง
+  { triggers: ['ผ้า', 'ไมโครไฟเบอร์', 'microfiber', 'ผ้าเช็ด', 'ชามัวร์'], searchIn: ['ผ้า'] },
+  { triggers: ['ซิลิโคน', 'silicone'], searchIn: ['ซิลิโคน'] },
+  { triggers: ['เทป', 'tape'], searchIn: ['เทป'] },
+  { triggers: ['ฟิล์ม', 'film'], searchIn: ['ฟิล์ม'] },
+  { triggers: ['ถุงขยะ', 'ถุงดำ'], searchIn: ['ถุงขยะ'] },
+  { triggers: ['น้ำยา', 'spray', 'สเปรย์'], searchIn: ['น้ำยา', 'SC'] },
+  // ป้าย
+  { triggers: ['ป้าย', 'ไวนิล', 'vinyl', 'banner'], searchIn: ['ป้ายไวนิล'] },
+  // กล่องเครื่องมือ
+  { triggers: ['กล่องเครื่องมือ', 'toolbox'], searchIn: ['กล่องเครื่องมือ'] },
+  // logo
+  { triggers: ['logo', 'โลโก้'], searchIn: ['Logo'] },
+];
 
 async function getInventory() {
   const encodedSheet = encodeURIComponent(SHEET_NAME);
@@ -18,9 +65,7 @@ async function getInventory() {
   const COL_ITEM = 2, COL_PROJECT = 4, COL_STATUS = 16;
   const COL_QTY = 24, COL_UNIT = 26, COL_LOCATION = 31;
 
-  // summary[project][item] = { qty, unit }
   const summary = {};
-
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
     if (cols.length < 32) continue;
@@ -36,14 +81,11 @@ async function getInventory() {
     if (location !== 'Warehouse Ramintra') continue;
     if (qty <= 0) continue;
 
-    // normalize project name
     let proj = 'อื่นๆ';
-    if (project.includes('7') || project.includes('Eleven') || project.toLowerCase().includes('7-11')) proj = '7-Eleven';
+    if (project.includes('7') || project.toLowerCase().includes('eleven') || project.includes('7-11')) proj = '7-Eleven';
     else if (project.toLowerCase().includes('airport') || project.toLowerCase().includes('air')) proj = 'Airport';
 
-    // clean item name
     const clean = item.replace(/_7-11/g,'').replace(/_Air/g,'').replace(/\\/g,'').trim();
-
     if (!summary[proj]) summary[proj] = {};
     if (!summary[proj][clean]) summary[proj][clean] = { qty: 0, unit: unit || 'ชิ้น' };
     summary[proj][clean].qty += qty;
@@ -52,26 +94,35 @@ async function getInventory() {
   return summary;
 }
 
-// Fuzzy search — ตรวจสอบว่า keyword ใน query ตรงกับชื่อสินค้าไหม
-function fuzzyMatch(name, query) {
-  const nameLower = name.toLowerCase();
-  const queryLower = query.toLowerCase();
+function smartSearch(summary, userMessage) {
+  const msgLower = userMessage.toLowerCase();
 
-  // ตัดคำทั่วไปออก
-  const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','warehouse','อยู่','เท่า','ไหร่','ครับ','ค่ะ'];
-  let cleaned = queryLower;
-  stopwords.forEach(sw => cleaned = cleaned.replace(new RegExp(sw, 'g'), ' '));
+  // หา keyword map ที่ตรงกับคำถาม
+  let searchTerms = [];
+  for (const mapping of KEYWORD_MAP) {
+    const matched = mapping.triggers.some(t => msgLower.includes(t.toLowerCase()));
+    if (matched) {
+      searchTerms = mapping.searchIn;
+      break;
+    }
+  }
 
-  const keywords = cleaned.split(/\s+/).filter(k => k.length >= 2);
-  return keywords.some(kw => nameLower.includes(kw));
-}
+  // ถ้าไม่เจอใน mapping ให้ใช้คำถามตรงๆ
+  if (searchTerms.length === 0) {
+    const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','ครับ','ค่ะ'];
+    let cleaned = msgLower;
+    stopwords.forEach(sw => cleaned = cleaned.replace(new RegExp(sw, 'g'), ' '));
+    searchTerms = cleaned.split(/\s+/).filter(k => k.length >= 2);
+  }
 
-function searchInventory(summary, userMessage) {
-  const results = {}; // { project: [{name, qty, unit}] }
-
+  // ค้นหาใน inventory
+  const results = {};
   for (const [proj, items] of Object.entries(summary)) {
     for (const [name, d] of Object.entries(items)) {
-      if (fuzzyMatch(name, userMessage)) {
+      const nameLower = name.toLowerCase();
+      // ต้องตรงทุก search term (AND)
+      const matched = searchTerms.every(term => nameLower.includes(term.toLowerCase()));
+      if (matched) {
         if (!results[proj]) results[proj] = [];
         results[proj].push({ name, qty: d.qty, unit: d.unit });
       }
@@ -83,7 +134,7 @@ function searchInventory(summary, userMessage) {
 function formatReply(results, userMessage) {
   const projects = Object.keys(results);
   if (projects.length === 0) {
-    return `ไม่พบรายการที่ตรงกับ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`;
+    return `ไม่พบ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`;
   }
 
   let reply = `📦 สินค้าพร้อมใช้ใน Warehouse:\n`;
@@ -115,7 +166,7 @@ app.post('/webhook', async (req, res) => {
     console.log('User asked:', userMessage);
     try {
       const summary = await getInventory();
-      const results = searchInventory(summary, userMessage);
+      const results = smartSearch(summary, userMessage);
       console.log('Found projects:', Object.keys(results));
       const reply = formatReply(results, userMessage);
       await replyToLine(replyToken, reply);
