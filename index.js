@@ -59,12 +59,18 @@ ${inventoryText}
 
   const response = await axios.post(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      contents: [{ parts: [{ text: prompt }] }]
-    }
+    { contents: [{ parts: [{ text: prompt }] }] }
   );
-
   return response.data.candidates[0].content.parts[0].text;
+}
+
+async function replyToLine(replyToken, text) {
+  const res = await axios.post(
+    'https://api.line.me/v2/bot/message/reply',
+    { replyToken, messages: [{ type: 'text', text }] },
+    { headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`, 'Content-Type': 'application/json' } }
+  );
+  console.log('LINE reply status:', res.status);
 }
 
 app.post('/webhook', async (req, res) => {
@@ -74,24 +80,20 @@ app.post('/webhook', async (req, res) => {
     if (event.type !== 'message' || event.message.type !== 'text') continue;
     const userMessage = event.message.text;
     const replyToken  = event.replyToken;
+    console.log('User asked:', userMessage);
     try {
       const inventoryText = await getInventory();
+      console.log('Inventory fetched OK');
       const reply = await askGemini(userMessage, inventoryText);
+      console.log('Gemini replied OK');
       await replyToLine(replyToken, reply);
     } catch (err) {
-      console.error('Error:', err.message);
-      await replyToLine(replyToken, 'ขออภัยครับ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง');
+      const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
+      console.log('ERROR:', errMsg);
+      await replyToLine(replyToken, 'ขออภัยครับ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง').catch(() => {});
     }
   }
 });
-
-async function replyToLine(replyToken, text) {
-  await axios.post(
-    'https://api.line.me/v2/bot/message/reply',
-    { replyToken, messages: [{ type: 'text', text }] },
-    { headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`, 'Content-Type': 'application/json' } }
-  );
-}
 
 app.get('/', (req, res) => res.send('LINE Warehouse Bot is running ✅'));
 const PORT = process.env.PORT || 3000;
