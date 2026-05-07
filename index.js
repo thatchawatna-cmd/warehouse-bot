@@ -38,56 +38,35 @@ async function getInventory() {
     const qty = parseInt(qtyRaw) || 0;
     if (qty <= 0) continue;
 
-    const cleanItem = item.replace(/_7-11/g, '').replace(/_Air/g, '').trim();
+    // ย่อชื่อ: ตัด _7-11, _Air ออก และตัด prefix ซ้ำๆ
+    const cleanItem = item
+      .replace(/_7-11/g, '').replace(/_Air/g, '')
+      .replace(/\\_7-11/g, '').replace(/\\_Air/g, '')
+      .trim();
+
     if (!summary[cleanItem]) summary[cleanItem] = { qty: 0, unit: unit || 'ชิ้น' };
     summary[cleanItem].qty += qty;
     if (unit) summary[cleanItem].unit = unit;
   }
 
-  return summary;
-}
-
-// กรองเฉพาะรายการที่เกี่ยวข้องกับคำถาม
-function filterInventory(summary, userMessage) {
-  const msg = userMessage.toLowerCase();
-  const entries = Object.entries(summary);
-  
-  // ถ้าถามเรื่องจอ ให้กรองเฉพาะจอ
-  // ถ้าถามทั้งหมด ให้ส่งทั้งหมด แต่จำกัดไว้ 50 รายการ
-  let filtered = entries;
-  
-  // keyword matching
-  const keywords = msg.match(/[ก-๙a-zA-Z0-9"]+/g) || [];
-  if (keywords.length > 0 && !msg.includes('ทั้งหมด') && !msg.includes('มีอะไร')) {
-    filtered = entries.filter(([name]) => {
-      const nameLower = name.toLowerCase();
-      return keywords.some(kw => kw.length > 1 && nameLower.includes(kw.toLowerCase()));
-    });
-    // ถ้า filter แล้วไม่เจออะไรเลย ส่งทั้งหมดแต่จำกัด 30 รายการ
-    if (filtered.length === 0) {
-      filtered = entries.slice(0, 30);
-    }
-  } else {
-    filtered = entries.slice(0, 50);
-  }
-
-  if (filtered.length === 0) return 'ไม่พบข้อมูลใน Warehouse';
-  return filtered.map(([name, d]) => `- ${name}: ${d.qty} ${d.unit}`).join('\n');
+  // แปลงเป็น text สั้นๆ เช่น "LFD HKC 37":5จอ, LFD Samsung 40":12จอ"
+  return Object.entries(summary)
+    .map(([name, d]) => `${name}:${d.qty}${d.unit}`)
+    .join(', ');
 }
 
 async function askGroq(userMessage, inventoryText) {
-  const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
-
-กฎ:
-- ข้อมูลด้านล่างคือสินค้า "สภาพดี + อยู่ใน Warehouse Ramintra + QTY > 0"
-- ตอบสั้น กระชับ ภาษาไทย
-- ถ้าไม่มีในคลัง บอกว่า "ขณะนี้ไม่มีในคลังครับ"
-- ถ้าถามรวมหลายรายการ ให้รวมยอดด้วย
-
-Inventory:
+  const prompt = `คุณคือ AI ช่วยตอบ Warehouse Inventory ของ Plan B Media
+ข้อมูลด้านล่างคือสินค้าพร้อมใช้ (ดี + อยู่ใน Warehouse + QTY>0):
 ${inventoryText}
 
-คำถาม: ${userMessage}`;
+คำถาม: "${userMessage}"
+
+วิธีตอบ:
+- ค้นหารายการที่เกี่ยวข้องกับคำถาม เช่น ถามว่า "จอ 37" ให้หาทุกรายการที่มีคำว่า 37 และเป็นจอ
+- ตอบสั้นๆ ภาษาไทย บอกชื่อย่อและจำนวน
+- ถ้าถามหลายรายการให้ตอบทีละรายการ
+- ถ้าไม่มีในคลังบอกว่า "ไม่มีในคลังครับ"`;
 
   const response = await axios.post(
     'https://api.groq.com/openai/v1/chat/completions',
@@ -119,9 +98,8 @@ app.post('/webhook', async (req, res) => {
     const replyToken  = event.replyToken;
     console.log('User asked:', userMessage);
     try {
-      const inventorySummary = await getInventory();
-      const inventoryText = filterInventory(inventorySummary, userMessage);
-      console.log('Inventory fetched OK, items:', inventoryText.split('\n').length);
+      const inventoryText = await getInventory();
+      console.log('Inventory:', inventoryText.substring(0, 200));
       const reply = await askGroq(userMessage, inventoryText);
       console.log('Groq replied OK');
       await replyToLine(replyToken, reply);
