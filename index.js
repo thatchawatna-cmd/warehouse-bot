@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1ug-1X3TFwNXeobmcfoohRqqudTcuyYfiagxhoWtPJLg';
 const SHEET_NAME = process.env.SHEET_NAME || 'Warehouse Airport&7-11 media';
 
@@ -42,7 +42,7 @@ async function getInventory() {
     .join('\n');
 }
 
-async function askGemini(userMessage, inventoryText) {
+async function askGroq(userMessage, inventoryText) {
   const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
 
 กฎการตอบ:
@@ -58,10 +58,20 @@ ${inventoryText}
 คำถาม: ${userMessage}`;
 
   const response = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    { contents: [{ parts: [{ text: prompt }] }] }
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 300
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    }
   );
-  return response.data.candidates[0].content.parts[0].text;
+  return response.data.choices[0].message.content;
 }
 
 async function replyToLine(replyToken, text) {
@@ -84,8 +94,8 @@ app.post('/webhook', async (req, res) => {
     try {
       const inventoryText = await getInventory();
       console.log('Inventory fetched OK');
-      const reply = await askGemini(userMessage, inventoryText);
-      console.log('Gemini replied OK');
+      const reply = await askGroq(userMessage, inventoryText);
+      console.log('Groq replied OK');
       await replyToLine(replyToken, reply);
     } catch (err) {
       const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
