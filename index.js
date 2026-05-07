@@ -15,30 +15,41 @@ async function getInventory() {
   const response = await axios.get(url);
   const lines = response.data.split('\n');
 
-  const COL_ITEM   = 2;
-  const COL_STATUS = 16;
-  const COL_INOUT  = 20;
-  const COL_UNIT   = 26;
+  // Column index (0-based จาก CSV):
+  // col2=รายการ, col16=Status, col24=QTY, col26=Unit(ไทย), col31=Location Name
+  const COL_ITEM     = 2;
+  const COL_STATUS   = 16;
+  const COL_QTY      = 24;
+  const COL_UNIT     = 26;
+  const COL_LOCATION = 31;
 
   const summary = {};
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
-    if (cols.length < 27) continue;
-    const item   = cols[COL_ITEM];
-    const status = cols[COL_STATUS];
-    const inout  = cols[COL_INOUT];
-    const unit   = cols[COL_UNIT];
+    if (cols.length < 32) continue;
+
+    const item     = cols[COL_ITEM];
+    const status   = cols[COL_STATUS];
+    const qtyRaw   = cols[COL_QTY];
+    const unit     = cols[COL_UNIT];
+    const location = cols[COL_LOCATION];
+
     if (!item || item === 'รายการ') continue;
-    if (status !== 'ดี' || inout !== 'In') continue;
+    if (status !== 'ดี') continue;
+    if (location !== 'Warehouse Ramintra') continue;
+
+    const qty = parseInt(qtyRaw) || 0;
+    if (qty <= 0) continue; // QTY=0 หมายถึงหมดแล้ว ไม่นับ
+
     const cleanItem = item.replace(/_7-11/g, '').replace(/_Air/g, '').trim();
-    if (!summary[cleanItem]) summary[cleanItem] = { count: 0, unit: unit || 'ชิ้น' };
-    summary[cleanItem].count += 1;
+    if (!summary[cleanItem]) summary[cleanItem] = { qty: 0, unit: unit || 'ชิ้น' };
+    summary[cleanItem].qty += qty;
     if (unit) summary[cleanItem].unit = unit;
   }
 
-  if (Object.keys(summary).length === 0) return 'ไม่พบข้อมูล Inventory';
+  if (Object.keys(summary).length === 0) return 'ไม่พบข้อมูลใน Warehouse';
   return Object.entries(summary)
-    .map(([name, d]) => `- ${name}: ${d.count} ${d.unit}`)
+    .map(([name, d]) => `- ${name}: ${d.qty} ${d.unit}`)
     .join('\n');
 }
 
@@ -46,8 +57,8 @@ async function askGroq(userMessage, inventoryText) {
   const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
 
 กฎการตอบ:
-- ตอบเฉพาะอุปกรณ์ที่ "พร้อมใช้งาน" (สภาพดี อยู่ใน Warehouse) เท่านั้น
-- ไม่ต้องพูดถึงของเสียหรือ Out
+- ข้อมูลด้านล่างคือสินค้า "สภาพดี + อยู่ใน Warehouse Ramintra" ที่มี QTY > 0 เท่านั้น
+- ตอบจำนวนตามข้อมูลที่ให้มาเท่านั้น ห้ามเดา
 - ตอบสั้น กระชับ ภาษาไทย
 - ถ้าถามสินค้าที่ไม่มีในคลัง ให้บอกว่า "ขณะนี้ไม่มีในคลังครับ"
 - ถ้าถามรวมหลายรายการ (เช่น จอ 37") ให้รวมยอดให้ด้วย
