@@ -15,8 +15,6 @@ async function getInventory() {
   const response = await axios.get(url);
   const lines = response.data.split('\n');
 
-  // Column index (0-based จาก CSV):
-  // col2=รายการ, col16=Status, col24=QTY, col26=Unit(ไทย), col31=Location Name
   const COL_ITEM     = 2;
   const COL_STATUS   = 16;
   const COL_QTY      = 24;
@@ -27,7 +25,6 @@ async function getInventory() {
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
     if (cols.length < 32) continue;
-
     const item     = cols[COL_ITEM];
     const status   = cols[COL_STATUS];
     const qtyRaw   = cols[COL_QTY];
@@ -39,7 +36,7 @@ async function getInventory() {
     if (location !== 'Warehouse Ramintra') continue;
 
     const qty = parseInt(qtyRaw) || 0;
-    if (qty <= 0) continue; // QTY=0 หมายถึงหมดแล้ว ไม่นับ
+    if (qty <= 0) continue;
 
     const cleanItem = item.replace(/_7-11/g, '').replace(/_Air/g, '').trim();
     if (!summary[cleanItem]) summary[cleanItem] = { qty: 0, unit: unit || 'ชิ้น' };
@@ -47,23 +44,47 @@ async function getInventory() {
     if (unit) summary[cleanItem].unit = unit;
   }
 
-  if (Object.keys(summary).length === 0) return 'ไม่พบข้อมูลใน Warehouse';
-  return Object.entries(summary)
-    .map(([name, d]) => `- ${name}: ${d.qty} ${d.unit}`)
-    .join('\n');
+  return summary;
+}
+
+// กรองเฉพาะรายการที่เกี่ยวข้องกับคำถาม
+function filterInventory(summary, userMessage) {
+  const msg = userMessage.toLowerCase();
+  const entries = Object.entries(summary);
+  
+  // ถ้าถามเรื่องจอ ให้กรองเฉพาะจอ
+  // ถ้าถามทั้งหมด ให้ส่งทั้งหมด แต่จำกัดไว้ 50 รายการ
+  let filtered = entries;
+  
+  // keyword matching
+  const keywords = msg.match(/[ก-๙a-zA-Z0-9"]+/g) || [];
+  if (keywords.length > 0 && !msg.includes('ทั้งหมด') && !msg.includes('มีอะไร')) {
+    filtered = entries.filter(([name]) => {
+      const nameLower = name.toLowerCase();
+      return keywords.some(kw => kw.length > 1 && nameLower.includes(kw.toLowerCase()));
+    });
+    // ถ้า filter แล้วไม่เจออะไรเลย ส่งทั้งหมดแต่จำกัด 30 รายการ
+    if (filtered.length === 0) {
+      filtered = entries.slice(0, 30);
+    }
+  } else {
+    filtered = entries.slice(0, 50);
+  }
+
+  if (filtered.length === 0) return 'ไม่พบข้อมูลใน Warehouse';
+  return filtered.map(([name, d]) => `- ${name}: ${d.qty} ${d.unit}`).join('\n');
 }
 
 async function askGroq(userMessage, inventoryText) {
   const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
 
-กฎการตอบ:
-- ข้อมูลด้านล่างคือสินค้า "สภาพดี + อยู่ใน Warehouse Ramintra" ที่มี QTY > 0 เท่านั้น
-- ตอบจำนวนตามข้อมูลที่ให้มาเท่านั้น ห้ามเดา
+กฎ:
+- ข้อมูลด้านล่างคือสินค้า "สภาพดี + อยู่ใน Warehouse Ramintra + QTY > 0"
 - ตอบสั้น กระชับ ภาษาไทย
-- ถ้าถามสินค้าที่ไม่มีในคลัง ให้บอกว่า "ขณะนี้ไม่มีในคลังครับ"
-- ถ้าถามรวมหลายรายการ (เช่น จอ 37") ให้รวมยอดให้ด้วย
+- ถ้าไม่มีในคลัง บอกว่า "ขณะนี้ไม่มีในคลังครับ"
+- ถ้าถามรวมหลายรายการ ให้รวมยอดด้วย
 
-ข้อมูล Inventory พร้อมใช้ปัจจุบัน:
+Inventory:
 ${inventoryText}
 
 คำถาม: ${userMessage}`;
@@ -73,14 +94,9 @@ ${inventoryText}
     {
       model: 'llama-3.1-8b-instant',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 300
+      max_tokens: 200
     },
-    {
-      headers: {
-        Authorization: `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    }
+    { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
   );
   return response.data.choices[0].message.content;
 }
@@ -103,8 +119,9 @@ app.post('/webhook', async (req, res) => {
     const replyToken  = event.replyToken;
     console.log('User asked:', userMessage);
     try {
-      const inventoryText = await getInventory();
-      console.log('Inventory fetched OK');
+      const inventorySummary = await getInventory();
+      const inventoryText = filterInventory(inventorySummary, userMessage);
+      console.log('Inventory fetched OK, items:', inventoryText.split('\n').length);
       const reply = await askGroq(userMessage, inventoryText);
       console.log('Groq replied OK');
       await replyToLine(replyToken, reply);
