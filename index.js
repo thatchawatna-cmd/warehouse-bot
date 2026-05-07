@@ -5,54 +5,43 @@ const app = express();
 app.use(express.json());
 
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1ug-1X3TFwNXeobmcfoohRqqudTcuyYfiagxhoWtPJLg';
 const SHEET_NAME = process.env.SHEET_NAME || 'Warehouse Airport&7-11 media';
 
-// ============================================================
-// KEYWORD MAPPING — คำที่ user พิมพ์ → keyword ที่ใช้ค้นหาใน sheet
-// เพิ่มได้เรื่อยๆ ตามที่ต้องการครับ
-// ============================================================
+// Keyword mapping — จอ = LFD, ลำโพง = ลำโพง, ฯลฯ
 const KEYWORD_MAP = [
-  // จอ
-  { triggers: ['จอ', 'lfd', 'screen', 'monitor', 'display'], searchIn: ['LFD'] },
-  { triggers: ['จอ 37', '37"', '37 นิ้ว', '37นิ้ว'], searchIn: ['LFD', '37'] },
-  { triggers: ['จอ 40', '40"', '40 นิ้ว', '40นิ้ว'], searchIn: ['LFD', '40'] },
-  { triggers: ['จอ 43', '43"', '43 นิ้ว', '43นิ้ว'], searchIn: ['LFD', '43'] },
-  { triggers: ['จอ 46', '46"', '46 นิ้ว', '46นิ้ว'], searchIn: ['LFD', '46'] },
-  { triggers: ['จอ 55', '55"', '55 นิ้ว', '55นิ้ว'], searchIn: ['LFD', '55'] },
+  { triggers: ['จอ 37', '37"', '37นิ้ว', '37 นิ้ว'], searchIn: ['LFD', '37'] },
+  { triggers: ['จอ 40', '40"', '40นิ้ว', '40 นิ้ว'], searchIn: ['LFD', '40'] },
+  { triggers: ['จอ 43', '43"', '43นิ้ว', '43 นิ้ว'], searchIn: ['LFD', '43'] },
+  { triggers: ['จอ 46', '46"', '46นิ้ว', '46 นิ้ว'], searchIn: ['LFD', '46'] },
+  { triggers: ['จอ 55', '55"', '55นิ้ว', '55 นิ้ว'], searchIn: ['LFD', '55'] },
   { triggers: ['จอ hkc', 'hkc'], searchIn: ['LFD HKC'] },
   { triggers: ['จอ samsung', 'samsung', 'ซัมซุง'], searchIn: ['LFD Samsung'] },
-  // Media Player
-  { triggers: ['player', 'media player', 'เพลเยอร์', 'เครื่องเล่น'], searchIn: ['Player', 'Media'] },
-  // อุปกรณ์ไฟฟ้า
-  { triggers: ['cb ', 'เซอร์กิต', 'เบรกเกอร์'], searchIn: ['CB '] },
+  { triggers: ['จอ'], searchIn: ['LFD'] },
+  { triggers: ['player', 'media player', 'เพลเยอร์'], searchIn: ['Player'] },
+  { triggers: ['cb ', 'เบรกเกอร์', 'เซอร์กิต'], searchIn: ['CB '] },
   { triggers: ['rcbo'], searchIn: ['RCBO'] },
-  { triggers: ['timer', 'ไทม์เมอร์', 'ไทเมอร์'], searchIn: ['Timer'] },
-  { triggers: ['ปลั๊ก', 'plug'], searchIn: ['Plug', 'ปลั๊ก', 'รางปลั๊ก'] },
+  { triggers: ['timer', 'ไทม์เมอร์'], searchIn: ['Timer'] },
+  { triggers: ['ปลั๊ก', 'plug', 'รางปลั๊ก'], searchIn: ['ปลั๊ก', 'Plug', 'รางปลั๊ก'] },
   { triggers: ['ลำโพง', 'speaker'], searchIn: ['ลำโพง'] },
-  { triggers: ['usb', 'ชาร์จ'], searchIn: ['USB', 'Charger'] },
-  // โครงสร้าง
-  { triggers: ['โครง', 'แร็ค', 'rack', 'bracket', 'ขาเหล็ก'], searchIn: ['โครงสร้าง', 'Bracket', 'ขาเหล็ก'] },
+  { triggers: ['usb', 'ชาร์จ'], searchIn: ['USB'] },
+  { triggers: ['โครง', 'แร็ค', 'rack', 'ขาเหล็ก'], searchIn: ['โครงสร้าง', 'ขาเหล็ก'] },
   { triggers: ['magnetic', 'แมกเนติก'], searchIn: ['Magnetic'] },
-  // เครื่องมือ
-  { triggers: ['ไขควง', 'screwdriver'], searchIn: ['ไขควง'] },
-  { triggers: ['คัตเตอร์', 'cutter'], searchIn: ['คัตเตอร์'] },
-  { triggers: ['คลิปแอมป์', 'แคลมป์มิเตอร์'], searchIn: ['คลิปแอมป์'] },
-  { triggers: ['บันได', 'ladder'], searchIn: ['บันได'] },
-  { triggers: ['ไฟฉาย', 'torch', 'flashlight'], searchIn: ['ไฟฉาย'] },
-  { triggers: ['คีม', 'plier'], searchIn: ['คีม'] },
-  // วัสดุสิ้นเปลือง
-  { triggers: ['ผ้า', 'ไมโครไฟเบอร์', 'microfiber', 'ผ้าเช็ด', 'ชามัวร์'], searchIn: ['ผ้า'] },
-  { triggers: ['ซิลิโคน', 'silicone'], searchIn: ['ซิลิโคน'] },
+  { triggers: ['ไขควง'], searchIn: ['ไขควง'] },
+  { triggers: ['คัตเตอร์'], searchIn: ['คัตเตอร์'] },
+  { triggers: ['คลิปแอมป์'], searchIn: ['คลิปแอมป์'] },
+  { triggers: ['บันได'], searchIn: ['บันได'] },
+  { triggers: ['ไฟฉาย'], searchIn: ['ไฟฉาย'] },
+  { triggers: ['คีม'], searchIn: ['คีม'] },
+  { triggers: ['ผ้า', 'ไมโครไฟเบอร์', 'ชามัวร์'], searchIn: ['ผ้า'] },
+  { triggers: ['ซิลิโคน'], searchIn: ['ซิลิโคน'] },
   { triggers: ['เทป', 'tape'], searchIn: ['เทป'] },
-  { triggers: ['ฟิล์ม', 'film'], searchIn: ['ฟิล์ม'] },
+  { triggers: ['ฟิล์ม'], searchIn: ['ฟิล์ม'] },
   { triggers: ['ถุงขยะ', 'ถุงดำ'], searchIn: ['ถุงขยะ'] },
-  { triggers: ['น้ำยา', 'spray', 'สเปรย์'], searchIn: ['น้ำยา', 'SC'] },
-  // ป้าย
-  { triggers: ['ป้าย', 'ไวนิล', 'vinyl', 'banner'], searchIn: ['ป้ายไวนิล'] },
-  // กล่องเครื่องมือ
-  { triggers: ['กล่องเครื่องมือ', 'toolbox'], searchIn: ['กล่องเครื่องมือ'] },
-  // logo
+  { triggers: ['น้ำยา'], searchIn: ['น้ำยา'] },
+  { triggers: ['ป้าย', 'ไวนิล', 'banner'], searchIn: ['ป้ายไวนิล'] },
+  { triggers: ['กล่องเครื่องมือ'], searchIn: ['กล่องเครื่องมือ'] },
   { triggers: ['logo', 'โลโก้'], searchIn: ['Logo'] },
 ];
 
@@ -96,31 +85,24 @@ async function getInventory() {
 
 function smartSearch(summary, userMessage) {
   const msgLower = userMessage.toLowerCase();
-
-  // หา keyword map ที่ตรงกับคำถาม
   let searchTerms = [];
+
   for (const mapping of KEYWORD_MAP) {
     const matched = mapping.triggers.some(t => msgLower.includes(t.toLowerCase()));
-    if (matched) {
-      searchTerms = mapping.searchIn;
-      break;
-    }
+    if (matched) { searchTerms = mapping.searchIn; break; }
   }
 
-  // ถ้าไม่เจอใน mapping ให้ใช้คำถามตรงๆ
   if (searchTerms.length === 0) {
-    const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','ครับ','ค่ะ'];
+    const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','ครับ','ค่ะ','warehouse'];
     let cleaned = msgLower;
     stopwords.forEach(sw => cleaned = cleaned.replace(new RegExp(sw, 'g'), ' '));
     searchTerms = cleaned.split(/\s+/).filter(k => k.length >= 2);
   }
 
-  // ค้นหาใน inventory
   const results = {};
   for (const [proj, items] of Object.entries(summary)) {
     for (const [name, d] of Object.entries(items)) {
       const nameLower = name.toLowerCase();
-      // ต้องตรงทุก search term (AND)
       const matched = searchTerms.every(term => nameLower.includes(term.toLowerCase()));
       if (matched) {
         if (!results[proj]) results[proj] = [];
@@ -131,20 +113,35 @@ function smartSearch(summary, userMessage) {
   return results;
 }
 
-function formatReply(results, userMessage) {
-  const projects = Object.keys(results);
-  if (projects.length === 0) {
+async function askGemini(userMessage, results) {
+  // ถ้าไม่เจอเลย ตอบทันที
+  if (Object.keys(results).length === 0) {
     return `ไม่พบ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`;
   }
 
-  let reply = `📦 สินค้าพร้อมใช้ใน Warehouse:\n`;
-  for (const proj of projects) {
-    reply += `\n🏷 Project: ${proj}\n`;
-    for (const item of results[proj]) {
-      reply += `• ${item.name}: ${item.qty} ${item.unit}\n`;
-    }
+  // สร้าง inventory text สั้นๆ
+  let inventoryText = '';
+  for (const [proj, items] of Object.entries(results)) {
+    inventoryText += `Project ${proj}:\n`;
+    items.forEach(i => { inventoryText += `- ${i.name}: ${i.qty} ${i.unit}\n`; });
   }
-  return reply.trim();
+
+  const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
+ข้อมูลที่ค้นพบจาก Warehouse:
+${inventoryText}
+คำถาม: "${userMessage}"
+
+กฎ:
+- ตอบสั้น กระชับ ภาษาไทย เป็นกันเอง
+- แสดงผลแยกตาม Project
+- ระบุชื่อสินค้าและจำนวนที่ชัดเจน
+- ห้ามเดาหรือแต่งข้อมูลที่ไม่มีในข้อมูลที่ให้มา`;
+
+  const response = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    { contents: [{ parts: [{ text: prompt }] }] }
+  );
+  return response.data.candidates[0].content.parts[0].text;
 }
 
 async function replyToLine(replyToken, text) {
@@ -167,8 +164,8 @@ app.post('/webhook', async (req, res) => {
     try {
       const summary = await getInventory();
       const results = smartSearch(summary, userMessage);
-      console.log('Found projects:', Object.keys(results));
-      const reply = formatReply(results, userMessage);
+      console.log('Found:', Object.keys(results));
+      const reply = await askGemini(userMessage, results);
       await replyToLine(replyToken, reply);
     } catch (err) {
       const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
