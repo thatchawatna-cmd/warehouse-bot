@@ -15,16 +15,20 @@ async function getInventory() {
   const response = await axios.get(url);
   const lines = response.data.split('\n');
 
-  const COL_ITEM = 2, COL_STATUS = 16, COL_QTY = 24, COL_UNIT = 26, COL_LOCATION = 31;
+  const COL_ITEM = 2, COL_PROJECT = 4, COL_STATUS = 16;
+  const COL_QTY = 24, COL_UNIT = 26, COL_LOCATION = 31;
+
+  // summary[project][item] = { qty, unit }
   const summary = {};
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
     if (cols.length < 32) continue;
-    const item = cols[COL_ITEM];
-    const status = cols[COL_STATUS];
-    const qty = parseInt(cols[COL_QTY]) || 0;
-    const unit = cols[COL_UNIT];
+    const item     = cols[COL_ITEM];
+    const project  = cols[COL_PROJECT];
+    const status   = cols[COL_STATUS];
+    const qty      = parseInt(cols[COL_QTY]) || 0;
+    const unit     = cols[COL_UNIT];
     const location = cols[COL_LOCATION];
 
     if (!item || item === 'รายการ') continue;
@@ -32,54 +36,64 @@ async function getInventory() {
     if (location !== 'Warehouse Ramintra') continue;
     if (qty <= 0) continue;
 
+    // normalize project name
+    let proj = 'อื่นๆ';
+    if (project.includes('7') || project.includes('Eleven') || project.toLowerCase().includes('7-11')) proj = '7-Eleven';
+    else if (project.toLowerCase().includes('airport') || project.toLowerCase().includes('air')) proj = 'Airport';
+
+    // clean item name
     const clean = item.replace(/_7-11/g,'').replace(/_Air/g,'').replace(/\\/g,'').trim();
-    if (!summary[clean]) summary[clean] = { qty: 0, unit: unit || 'ชิ้น' };
-    summary[clean].qty += qty;
-    if (unit) summary[clean].unit = unit;
+
+    if (!summary[proj]) summary[proj] = {};
+    if (!summary[proj][clean]) summary[proj][clean] = { qty: 0, unit: unit || 'ชิ้น' };
+    summary[proj][clean].qty += qty;
+    if (unit) summary[proj][clean].unit = unit;
   }
   return summary;
 }
 
-// ค้นหาด้วย keywords จากคำถาม
+// Fuzzy search — ตรวจสอบว่า keyword ใน query ตรงกับชื่อสินค้าไหม
+function fuzzyMatch(name, query) {
+  const nameLower = name.toLowerCase();
+  const queryLower = query.toLowerCase();
+
+  // ตัดคำทั่วไปออก
+  const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','warehouse','อยู่','เท่า','ไหร่','ครับ','ค่ะ'];
+  let cleaned = queryLower;
+  stopwords.forEach(sw => cleaned = cleaned.replace(new RegExp(sw, 'g'), ' '));
+
+  const keywords = cleaned.split(/\s+/).filter(k => k.length >= 2);
+  return keywords.some(kw => nameLower.includes(kw));
+}
+
 function searchInventory(summary, userMessage) {
-  const msg = userMessage.toLowerCase()
-    .replace(/เหลือ|เท่าไหร่|มีไหม|มีเท่าไหร่|มี|ของ|ใน|คลัง|โกดัง/g, ' ')
-    .trim();
+  const results = {}; // { project: [{name, qty, unit}] }
 
-  // แยก keywords
-  const keywords = msg.split(/\s+/).filter(k => k.length >= 1);
-
-  const results = [];
-  for (const [name, d] of Object.entries(summary)) {
-    const nameLower = name.toLowerCase();
-    // ถ้า keyword ใดๆ ตรงกับชื่อสินค้า
-    const matched = keywords.some(kw => nameLower.includes(kw));
-    if (matched) results.push(`${name}: ${d.qty} ${d.unit}`);
+  for (const [proj, items] of Object.entries(summary)) {
+    for (const [name, d] of Object.entries(items)) {
+      if (fuzzyMatch(name, userMessage)) {
+        if (!results[proj]) results[proj] = [];
+        results[proj].push({ name, qty: d.qty, unit: d.unit });
+      }
+    }
   }
   return results;
 }
 
-async function askGroq(userMessage, results) {
-  let answer;
-
-  if (results.length === 0) {
-    answer = 'ขณะนี้ไม่มีในคลังครับ';
-  } else if (results.length <= 5) {
-    // ถ้าน้อยกว่า 5 รายการ ตอบตรงๆ เลยไม่ต้องผ่าน AI
-    answer = `📦 สินค้าพร้อมใช้ใน Warehouse:\n${results.map(r => `• ${r}`).join('\n')}`;
-  } else {
-    // ถ้าเยอะให้ Groq สรุป แต่ส่งแค่ 20 รายการแรก
-    const inventoryText = results.slice(0, 20).join(', ');
-    const prompt = `สินค้าพร้อมใช้: ${inventoryText}\nคำถาม: ${userMessage}\nตอบสั้นๆ ภาษาไทย บอกชื่อและจำนวน`;
-
-    const response = await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
-      { model: 'llama-3.1-8b-instant', messages: [{ role: 'user', content: prompt }], max_tokens: 200 },
-      { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
-    );
-    answer = response.data.choices[0].message.content;
+function formatReply(results, userMessage) {
+  const projects = Object.keys(results);
+  if (projects.length === 0) {
+    return `ไม่พบรายการที่ตรงกับ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`;
   }
-  return answer;
+
+  let reply = `📦 สินค้าพร้อมใช้ใน Warehouse:\n`;
+  for (const proj of projects) {
+    reply += `\n🏷 Project: ${proj}\n`;
+    for (const item of results[proj]) {
+      reply += `• ${item.name}: ${item.qty} ${item.unit}\n`;
+    }
+  }
+  return reply.trim();
 }
 
 async function replyToLine(replyToken, text) {
@@ -102,13 +116,13 @@ app.post('/webhook', async (req, res) => {
     try {
       const summary = await getInventory();
       const results = searchInventory(summary, userMessage);
-      console.log('Found:', results.length, 'items');
-      const reply = await askGroq(userMessage, results);
+      console.log('Found projects:', Object.keys(results));
+      const reply = formatReply(results, userMessage);
       await replyToLine(replyToken, reply);
     } catch (err) {
       const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
       console.log('ERROR:', errMsg);
-      await replyToLine(replyToken, 'ขออภัยครับ เกิดข้อผิดพลาด').catch(() => {});
+      await replyToLine(replyToken, 'ขออภัยครับ เกิดข้อผิดพลาด\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏').catch(() => {});
     }
   }
 });
