@@ -12,9 +12,16 @@ const RENDER_URL = process.env.RENDER_URL || 'https://warehouse-bot-wdp3.onrende
 
 // Keep-alive ทุก 14 นาที
 setInterval(async () => {
-  try { await axios.get(`${RENDER_URL}/ping`); console.log('ping ok'); }
-  catch (e) { console.log('ping failed'); }
+  try { await axios.get(`${RENDER_URL}/ping`); }
+  catch (e) {}
 }, 14 * 60 * 1000);
+
+// Category ที่ไม่ต้องตอบ
+const EXCLUDED_CATEGORIES = [
+  'อุปกรณ์และเครื่องใช้สำนักงาน',
+  'อุปกรณ์วัสดุสำนักงานใช้ไป',
+  'อุปกรณ์วัสดุสิ้นเปลืองใช้ไป',
+];
 
 function parseCSVLine(line) {
   const result = [];
@@ -29,34 +36,6 @@ function parseCSVLine(line) {
   return result;
 }
 
-const KEYWORD_MAP = [
-  { triggers: ['จอ 37', '37"', '37นิ้ว', '37 นิ้ว'], searchIn: ['LFD', '37'] },
-  { triggers: ['จอ 40', '40"', '40นิ้ว', '40 นิ้ว'], searchIn: ['LFD', '40'] },
-  { triggers: ['จอ 43', '43"', '43นิ้ว', '43 นิ้ว'], searchIn: ['LFD', '43'] },
-  { triggers: ['จอ 46', '46"', '46นิ้ว', '46 นิ้ว'], searchIn: ['LFD', '46'] },
-  { triggers: ['จอ 55', '55"', '55นิ้ว', '55 นิ้ว'], searchIn: ['LFD', '55'] },
-  { triggers: ['จอ hkc', 'hkc'], searchIn: ['LFD HKC'] },
-  { triggers: ['จอ samsung', 'samsung', 'ซัมซุง'], searchIn: ['LFD Samsung'] },
-  { triggers: ['จอ'], searchIn: ['LFD'] },
-  { triggers: ['player', 'media player', 'เพลเยอร์'], searchIn: ['Player'] },
-  { triggers: ['cb ', 'เบรกเกอร์'], searchIn: ['CB '] },
-  { triggers: ['rcbo'], searchIn: ['RCBO'] },
-  { triggers: ['ปลั๊ก', 'plug'], searchIn: ['ปลั๊ก', 'Plug'] },
-  { triggers: ['ลำโพง', 'speaker'], searchIn: ['ลำโพง'] },
-  { triggers: ['โครง', 'ขาเหล็ก'], searchIn: ['โครงสร้าง', 'ขาเหล็ก'] },
-  { triggers: ['ไขควง'], searchIn: ['ไขควง'] },
-  { triggers: ['คัตเตอร์'], searchIn: ['คัตเตอร์'] },
-  { triggers: ['บันได'], searchIn: ['บันได'] },
-  { triggers: ['ไฟฉาย'], searchIn: ['ไฟฉาย'] },
-  { triggers: ['ผ้า', 'ไมโครไฟเบอร์', 'ชามัวร์'], searchIn: ['ผ้า'] },
-  { triggers: ['ซิลิโคน'], searchIn: ['ซิลิโคน'] },
-  { triggers: ['เทป'], searchIn: ['เทป'] },
-  { triggers: ['ฟิล์ม'], searchIn: ['ฟิล์ม'] },
-  { triggers: ['น้ำยา'], searchIn: ['น้ำยา'] },
-  { triggers: ['ป้าย', 'ไวนิล'], searchIn: ['ป้ายไวนิล'] },
-  { triggers: ['logo', 'โลโก้'], searchIn: ['Logo'] },
-];
-
 async function getInventory() {
   const encodedSheet = encodeURIComponent(SHEET_NAME);
   const url = `https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodedSheet}`;
@@ -65,7 +44,7 @@ async function getInventory() {
 
   const headers = parseCSVLine(lines[0]);
   let COL_ITEM = -1, COL_PROJECT = -1, COL_STATUS = -1;
-  let COL_QTY = -1, COL_UNIT = -1, COL_LOCATION = -1;
+  let COL_QTY = -1, COL_UNIT = -1, COL_LOCATION = -1, COL_CATEGORY = -1;
 
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i].toLowerCase().trim();
@@ -75,6 +54,7 @@ async function getInventory() {
     if (h === 'qty' && COL_QTY === -1) COL_QTY = i;
     if (h.includes('unit') && h.includes('ไทย') && COL_UNIT === -1) COL_UNIT = i;
     if (h === 'location name' && COL_LOCATION === -1) COL_LOCATION = i;
+    if (h.includes('ประเภทของสินทรัพย์') && COL_CATEGORY === -1) COL_CATEGORY = i;
   }
 
   if (COL_ITEM === -1) COL_ITEM = 2;
@@ -97,11 +77,15 @@ async function getInventory() {
     const qty      = parseInt(cols[COL_QTY]) || 0;
     const unit     = cols[COL_UNIT] || '';
     const location = cols[COL_LOCATION] || '';
+    const category = COL_CATEGORY >= 0 ? (cols[COL_CATEGORY] || '') : '';
 
     if (!item || item === 'รายการ') continue;
     if (status !== 'ดี') continue;
     if (!location.includes('Warehouse')) continue;
     if (qty <= 0) continue;
+
+    // ข้ามหมวดที่ไม่ต้องตอบ
+    if (EXCLUDED_CATEGORIES.some(ex => category.includes(ex) || item.includes(ex))) continue;
 
     let proj = 'อื่นๆ';
     if (project.includes('7') || project.toLowerCase().includes('eleven')) proj = '7-Eleven';
@@ -113,71 +97,47 @@ async function getInventory() {
     summary[proj][clean].qty += qty;
     if (unit) summary[proj][clean].unit = unit;
   }
-
-  console.log(`Projects found: ${Object.keys(summary)}`);
   return summary;
 }
 
-function smartSearch(summary, userMessage) {
-  const msgLower = userMessage.toLowerCase();
-  let searchTerms = [];
-
-  for (const mapping of KEYWORD_MAP) {
-    const matched = mapping.triggers.some(t => msgLower.includes(t.toLowerCase()));
-    if (matched) { searchTerms = mapping.searchIn; break; }
-  }
-
-  if (searchTerms.length === 0) {
-    const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','ครับ','ค่ะ'];
-    let cleaned = msgLower;
-    stopwords.forEach(sw => cleaned = cleaned.replace(new RegExp(sw, 'g'), ' '));
-    searchTerms = cleaned.split(/\s+/).filter(k => k.length >= 2);
-  }
-
-  console.log('Search terms:', searchTerms);
-
-  const results = {};
+// สร้าง inventory text สั้นๆ สำหรับส่ง AI
+function buildInventoryText(summary) {
+  let text = '';
   for (const [proj, items] of Object.entries(summary)) {
-    for (const [name, d] of Object.entries(items)) {
-      const nameLower = name.toLowerCase();
-      const matched = searchTerms.every(term => nameLower.includes(term.toLowerCase()));
-      if (matched) {
-        if (!results[proj]) results[proj] = [];
-        results[proj].push({ name, qty: d.qty, unit: d.unit });
-      }
-    }
+    text += `[${proj}] `;
+    text += Object.entries(items).map(([name, d]) => `${name}:${d.qty}${d.unit}`).join(', ');
+    text += '\n';
   }
-  return results;
+  return text;
 }
 
-function formatReply(userMessage, results) {
-  // ถ้าไม่เจอ
-  if (Object.keys(results).length === 0) {
-    return `ไม่พบ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`;
-  }
+async function askGroq(userMessage, inventoryText) {
+  const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
 
-  // ตอบตรงๆ โดยไม่ผ่าน AI — เร็ว แม่นยำ ฟรี
-  let reply = `📦 สินค้าพร้อมใช้ใน Warehouse:\n`;
-  for (const [proj, items] of Object.entries(results)) {
-    reply += `\n🏷 Project: ${proj}\n`;
-    for (const item of items) {
-      // ทำชื่อสวยขึ้น
-      const name = item.name
-        .replace(/LFD /g, '')
-        .replace(/"/g, '"')
-        .trim();
-      reply += `• ${name}: ${item.qty} ${item.unit}\n`;
-    }
-  }
+ข้อมูลสินค้าพร้อมใช้ใน Warehouse (สภาพดี):
+${inventoryText}
 
-  // รวมยอดถ้ามีหลาย project
-  const allItems = Object.values(results).flat();
-  if (allItems.length > 1 && Object.keys(results).length > 1) {
-    const total = allItems.reduce((sum, i) => sum + i.qty, 0);
-    reply += `\n📊 รวมทั้งหมด: ${total} ${allItems[0].unit}`;
-  }
+คำถาม: "${userMessage}"
 
-  return reply.trim();
+กฎการตอบ:
+1. ค้นหารายการที่เกี่ยวข้องกับคำถามจากข้อมูลที่ให้
+2. ตอบสั้น กระชับ ภาษาไทย เป็นกันเอง
+3. แสดงแยกตาม Project (7-Eleven / Airport)
+4. ถ้าถามว่ามีอะไรบ้าง ให้แสดงรายการทั้งหมดที่เกี่ยวข้อง
+5. ถ้าถามจำนวนทั้งหมด ให้รวมยอดทุก Project
+6. ห้ามตอบหรือแสดงข้อมูลเกี่ยวกับ อุปกรณ์สำนักงาน หรือวัสดุสิ้นเปลืองสำนักงาน
+7. ถ้าหาไม่เจอในข้อมูล ให้ตอบว่า "ไม่พบในคลังครับ รอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏"`;
+
+  const response = await axios.post(
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 400
+    },
+    { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
+  );
+  return response.data.choices[0].message.content;
 }
 
 async function replyToLine(replyToken, text) {
@@ -199,9 +159,9 @@ app.post('/webhook', async (req, res) => {
     console.log('User asked:', userMessage);
     try {
       const summary = await getInventory();
-      const results = smartSearch(summary, userMessage);
-      console.log('Found:', Object.keys(results));
-      const reply = formatReply(userMessage, results);
+      const inventoryText = buildInventoryText(summary);
+      console.log('Inventory built, sending to Groq...');
+      const reply = await askGroq(userMessage, inventoryText);
       await replyToLine(replyToken, reply);
     } catch (err) {
       const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
