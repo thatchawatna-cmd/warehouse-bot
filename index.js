@@ -8,8 +8,21 @@ const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1ug-1X3TFwNXeobmcfoohRqqudTcuyYfiagxhoWtPJLg';
 const SHEET_NAME = process.env.SHEET_NAME || 'Warehouse Airport&7-11 media';
+const RENDER_URL = process.env.RENDER_URL || 'https://warehouse-bot-wdp3.onrender.com';
 
-// Keyword mapping — จอ = LFD, ลำโพง = ลำโพง, ฯลฯ
+// ============================================================
+// KEEP-ALIVE — ping ตัวเองทุก 14 นาที ไม่ให้ Render sleep
+// ============================================================
+setInterval(async () => {
+  try {
+    await axios.get(`${RENDER_URL}/ping`);
+    console.log('Keep-alive ping sent');
+  } catch (err) {
+    console.log('Keep-alive failed:', err.message);
+  }
+}, 14 * 60 * 1000); // 14 นาที
+
+// Keyword mapping
 const KEYWORD_MAP = [
   { triggers: ['จอ 37', '37"', '37นิ้ว', '37 นิ้ว'], searchIn: ['LFD', '37'] },
   { triggers: ['จอ 40', '40"', '40นิ้ว', '40 นิ้ว'], searchIn: ['LFD', '40'] },
@@ -20,28 +33,23 @@ const KEYWORD_MAP = [
   { triggers: ['จอ samsung', 'samsung', 'ซัมซุง'], searchIn: ['LFD Samsung'] },
   { triggers: ['จอ'], searchIn: ['LFD'] },
   { triggers: ['player', 'media player', 'เพลเยอร์'], searchIn: ['Player'] },
-  { triggers: ['cb ', 'เบรกเกอร์', 'เซอร์กิต'], searchIn: ['CB '] },
+  { triggers: ['cb ', 'เบรกเกอร์'], searchIn: ['CB '] },
   { triggers: ['rcbo'], searchIn: ['RCBO'] },
   { triggers: ['timer', 'ไทม์เมอร์'], searchIn: ['Timer'] },
-  { triggers: ['ปลั๊ก', 'plug', 'รางปลั๊ก'], searchIn: ['ปลั๊ก', 'Plug', 'รางปลั๊ก'] },
+  { triggers: ['ปลั๊ก', 'plug'], searchIn: ['ปลั๊ก', 'Plug'] },
   { triggers: ['ลำโพง', 'speaker'], searchIn: ['ลำโพง'] },
-  { triggers: ['usb', 'ชาร์จ'], searchIn: ['USB'] },
-  { triggers: ['โครง', 'แร็ค', 'rack', 'ขาเหล็ก'], searchIn: ['โครงสร้าง', 'ขาเหล็ก'] },
-  { triggers: ['magnetic', 'แมกเนติก'], searchIn: ['Magnetic'] },
+  { triggers: ['usb'], searchIn: ['USB'] },
+  { triggers: ['โครง', 'ขาเหล็ก'], searchIn: ['โครงสร้าง', 'ขาเหล็ก'] },
   { triggers: ['ไขควง'], searchIn: ['ไขควง'] },
   { triggers: ['คัตเตอร์'], searchIn: ['คัตเตอร์'] },
-  { triggers: ['คลิปแอมป์'], searchIn: ['คลิปแอมป์'] },
   { triggers: ['บันได'], searchIn: ['บันได'] },
   { triggers: ['ไฟฉาย'], searchIn: ['ไฟฉาย'] },
-  { triggers: ['คีม'], searchIn: ['คีม'] },
   { triggers: ['ผ้า', 'ไมโครไฟเบอร์', 'ชามัวร์'], searchIn: ['ผ้า'] },
   { triggers: ['ซิลิโคน'], searchIn: ['ซิลิโคน'] },
-  { triggers: ['เทป', 'tape'], searchIn: ['เทป'] },
+  { triggers: ['เทป'], searchIn: ['เทป'] },
   { triggers: ['ฟิล์ม'], searchIn: ['ฟิล์ม'] },
-  { triggers: ['ถุงขยะ', 'ถุงดำ'], searchIn: ['ถุงขยะ'] },
   { triggers: ['น้ำยา'], searchIn: ['น้ำยา'] },
-  { triggers: ['ป้าย', 'ไวนิล', 'banner'], searchIn: ['ป้ายไวนิล'] },
-  { triggers: ['กล่องเครื่องมือ'], searchIn: ['กล่องเครื่องมือ'] },
+  { triggers: ['ป้าย', 'ไวนิล'], searchIn: ['ป้ายไวนิล'] },
   { triggers: ['logo', 'โลโก้'], searchIn: ['Logo'] },
 ];
 
@@ -93,7 +101,7 @@ function smartSearch(summary, userMessage) {
   }
 
   if (searchTerms.length === 0) {
-    const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','ครับ','ค่ะ','warehouse'];
+    const stopwords = ['เหลือ','เท่าไหร่','มีไหม','มีเท่าไหร่','มี','ของ','ใน','คลัง','โกดัง','ครับ','ค่ะ'];
     let cleaned = msgLower;
     stopwords.forEach(sw => cleaned = cleaned.replace(new RegExp(sw, 'g'), ' '));
     searchTerms = cleaned.split(/\s+/).filter(k => k.length >= 2);
@@ -114,12 +122,10 @@ function smartSearch(summary, userMessage) {
 }
 
 async function askGemini(userMessage, results) {
-  // ถ้าไม่เจอเลย ตอบทันที
   if (Object.keys(results).length === 0) {
     return `ไม่พบ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`;
   }
 
-  // สร้าง inventory text สั้นๆ
   let inventoryText = '';
   for (const [proj, items] of Object.entries(results)) {
     inventoryText += `Project ${proj}:\n`;
@@ -130,12 +136,7 @@ async function askGemini(userMessage, results) {
 ข้อมูลที่ค้นพบจาก Warehouse:
 ${inventoryText}
 คำถาม: "${userMessage}"
-
-กฎ:
-- ตอบสั้น กระชับ ภาษาไทย เป็นกันเอง
-- แสดงผลแยกตาม Project
-- ระบุชื่อสินค้าและจำนวนที่ชัดเจน
-- ห้ามเดาหรือแต่งข้อมูลที่ไม่มีในข้อมูลที่ให้มา`;
+กฎ: ตอบสั้น กระชับ ภาษาไทย เป็นกันเอง แสดงผลแยกตาม Project ระบุชื่อสินค้าและจำนวนที่ชัดเจน ห้ามเดาหรือแต่งข้อมูล`;
 
   const response = await axios.post(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
@@ -176,5 +177,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/', (req, res) => res.send('LINE Warehouse Bot is running ✅'));
+app.get('/ping', (req, res) => res.send('pong'));
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
