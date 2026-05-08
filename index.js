@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1ug-1X3TFwNXeobmcfoohRqqudTcuyYfiagxhoWtPJLg';
 const SHEET_NAME = process.env.SHEET_NAME || 'Warehouse Airport&7-11 media';
 const RENDER_URL = process.env.RENDER_URL || 'https://warehouse-bot-wdp3.onrender.com';
@@ -16,20 +16,14 @@ setInterval(async () => {
   catch (e) { console.log('ping failed'); }
 }, 14 * 60 * 1000);
 
-// CSV parser แบบง่าย รองรับ comma ใน quotes
 function parseCSVLine(line) {
   const result = [];
   let current = '';
   let inQuotes = false;
   for (let i = 0; i < line.length; i++) {
-    if (line[i] === '"') {
-      inQuotes = !inQuotes;
-    } else if (line[i] === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += line[i];
-    }
+    if (line[i] === '"') { inQuotes = !inQuotes; }
+    else if (line[i] === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+    else { current += line[i]; }
   }
   result.push(current.trim());
   return result;
@@ -69,24 +63,20 @@ async function getInventory() {
   const response = await axios.get(url);
   const lines = response.data.split('\n');
 
-  // หา header row เพื่อ map column
   const headers = parseCSVLine(lines[0]);
   let COL_ITEM = -1, COL_PROJECT = -1, COL_STATUS = -1;
   let COL_QTY = -1, COL_UNIT = -1, COL_LOCATION = -1;
 
   for (let i = 0; i < headers.length; i++) {
-    const h = headers[i].toLowerCase().replace(/\s+/g, ' ').trim();
+    const h = headers[i].toLowerCase().trim();
     if (h.includes('รายการ') && COL_ITEM === -1) COL_ITEM = i;
     if (h === 'project' && COL_PROJECT === -1) COL_PROJECT = i;
     if (h === 'status' && COL_STATUS === -1) COL_STATUS = i;
     if (h === 'qty' && COL_QTY === -1) COL_QTY = i;
-    if ((h === 'unit ( ไทย )' || h === 'unit (ไทย)' || h.includes('unit') && h.includes('ไทย')) && COL_UNIT === -1) COL_UNIT = i;
+    if (h.includes('unit') && h.includes('ไทย') && COL_UNIT === -1) COL_UNIT = i;
     if (h === 'location name' && COL_LOCATION === -1) COL_LOCATION = i;
   }
 
-  console.log(`Columns: item=${COL_ITEM} project=${COL_PROJECT} status=${COL_STATUS} qty=${COL_QTY} unit=${COL_UNIT} location=${COL_LOCATION}`);
-
-  // fallback ถ้า header map ไม่เจอ
   if (COL_ITEM === -1) COL_ITEM = 2;
   if (COL_PROJECT === -1) COL_PROJECT = 4;
   if (COL_STATUS === -1) COL_STATUS = 16;
@@ -95,12 +85,11 @@ async function getInventory() {
   if (COL_LOCATION === -1) COL_LOCATION = 31;
 
   const summary = {};
-  let warehouseCount = 0;
-
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
     const cols = parseCSVLine(lines[i]);
-    if (cols.length < Math.max(COL_ITEM, COL_STATUS, COL_QTY, COL_LOCATION) + 1) continue;
+    const maxCol = Math.max(COL_ITEM, COL_STATUS, COL_QTY, COL_LOCATION);
+    if (cols.length < maxCol + 1) continue;
 
     const item     = cols[COL_ITEM] || '';
     const project  = cols[COL_PROJECT] || '';
@@ -114,8 +103,6 @@ async function getInventory() {
     if (!location.includes('Warehouse')) continue;
     if (qty <= 0) continue;
 
-    warehouseCount++;
-
     let proj = 'อื่นๆ';
     if (project.includes('7') || project.toLowerCase().includes('eleven')) proj = '7-Eleven';
     else if (project.toLowerCase().includes('airport') || project.toLowerCase().includes('air')) proj = 'Airport';
@@ -127,7 +114,7 @@ async function getInventory() {
     if (unit) summary[proj][clean].unit = unit;
   }
 
-  console.log(`Warehouse items found: ${warehouseCount}, Projects: ${Object.keys(summary)}`);
+  console.log(`Projects found: ${Object.keys(summary)}`);
   return summary;
 }
 
@@ -163,28 +150,34 @@ function smartSearch(summary, userMessage) {
   return results;
 }
 
-async function askGemini(userMessage, results) {
+function formatReply(userMessage, results) {
+  // ถ้าไม่เจอ
   if (Object.keys(results).length === 0) {
     return `ไม่พบ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`;
   }
 
-  let inventoryText = '';
+  // ตอบตรงๆ โดยไม่ผ่าน AI — เร็ว แม่นยำ ฟรี
+  let reply = `📦 สินค้าพร้อมใช้ใน Warehouse:\n`;
   for (const [proj, items] of Object.entries(results)) {
-    inventoryText += `Project ${proj}:\n`;
-    items.forEach(i => { inventoryText += `- ${i.name}: ${i.qty} ${i.unit}\n`; });
+    reply += `\n🏷 Project: ${proj}\n`;
+    for (const item of items) {
+      // ทำชื่อสวยขึ้น
+      const name = item.name
+        .replace(/LFD /g, '')
+        .replace(/"/g, '"')
+        .trim();
+      reply += `• ${name}: ${item.qty} ${item.unit}\n`;
+    }
   }
 
-  const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
-ข้อมูลที่ค้นพบ:
-${inventoryText}
-คำถาม: "${userMessage}"
-ตอบสั้น กระชับ ภาษาไทย เป็นกันเอง แสดงแยกตาม Project ห้ามเดาหรือแต่งข้อมูล`;
+  // รวมยอดถ้ามีหลาย project
+  const allItems = Object.values(results).flat();
+  if (allItems.length > 1 && Object.keys(results).length > 1) {
+    const total = allItems.reduce((sum, i) => sum + i.qty, 0);
+    reply += `\n📊 รวมทั้งหมด: ${total} ${allItems[0].unit}`;
+  }
 
-  const response = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    { contents: [{ parts: [{ text: prompt }] }] }
-  );
-  return response.data.candidates[0].content.parts[0].text;
+  return reply.trim();
 }
 
 async function replyToLine(replyToken, text) {
@@ -207,8 +200,8 @@ app.post('/webhook', async (req, res) => {
     try {
       const summary = await getInventory();
       const results = smartSearch(summary, userMessage);
-      console.log('Found projects:', Object.keys(results));
-      const reply = await askGemini(userMessage, results);
+      console.log('Found:', Object.keys(results));
+      const reply = formatReply(userMessage, results);
       await replyToLine(replyToken, reply);
     } catch (err) {
       const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
