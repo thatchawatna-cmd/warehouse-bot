@@ -10,19 +10,31 @@ const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1ug-1X3TFwNXeobmcfoohRqq
 const SHEET_NAME = process.env.SHEET_NAME || 'Warehouse Airport&7-11 media';
 const RENDER_URL = process.env.RENDER_URL || 'https://warehouse-bot-wdp3.onrender.com';
 
-// ============================================================
-// KEEP-ALIVE — ping ตัวเองทุก 14 นาที ไม่ให้ Render sleep
-// ============================================================
+// Keep-alive ทุก 14 นาที
 setInterval(async () => {
-  try {
-    await axios.get(`${RENDER_URL}/ping`);
-    console.log('Keep-alive ping sent');
-  } catch (err) {
-    console.log('Keep-alive failed:', err.message);
-  }
-}, 14 * 60 * 1000); // 14 นาที
+  try { await axios.get(`${RENDER_URL}/ping`); console.log('ping ok'); }
+  catch (e) { console.log('ping failed'); }
+}, 14 * 60 * 1000);
 
-// Keyword mapping
+// CSV parser แบบง่าย รองรับ comma ใน quotes
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '"') {
+      inQuotes = !inQuotes;
+    } else if (line[i] === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += line[i];
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
 const KEYWORD_MAP = [
   { triggers: ['จอ 37', '37"', '37นิ้ว', '37 นิ้ว'], searchIn: ['LFD', '37'] },
   { triggers: ['จอ 40', '40"', '40นิ้ว', '40 นิ้ว'], searchIn: ['LFD', '40'] },
@@ -35,10 +47,8 @@ const KEYWORD_MAP = [
   { triggers: ['player', 'media player', 'เพลเยอร์'], searchIn: ['Player'] },
   { triggers: ['cb ', 'เบรกเกอร์'], searchIn: ['CB '] },
   { triggers: ['rcbo'], searchIn: ['RCBO'] },
-  { triggers: ['timer', 'ไทม์เมอร์'], searchIn: ['Timer'] },
   { triggers: ['ปลั๊ก', 'plug'], searchIn: ['ปลั๊ก', 'Plug'] },
   { triggers: ['ลำโพง', 'speaker'], searchIn: ['ลำโพง'] },
-  { triggers: ['usb'], searchIn: ['USB'] },
   { triggers: ['โครง', 'ขาเหล็ก'], searchIn: ['โครงสร้าง', 'ขาเหล็ก'] },
   { triggers: ['ไขควง'], searchIn: ['ไขควง'] },
   { triggers: ['คัตเตอร์'], searchIn: ['คัตเตอร์'] },
@@ -59,27 +69,55 @@ async function getInventory() {
   const response = await axios.get(url);
   const lines = response.data.split('\n');
 
-  const COL_ITEM = 2, COL_PROJECT = 4, COL_STATUS = 16;
-  const COL_QTY = 24, COL_UNIT = 26, COL_LOCATION = 31;
+  // หา header row เพื่อ map column
+  const headers = parseCSVLine(lines[0]);
+  let COL_ITEM = -1, COL_PROJECT = -1, COL_STATUS = -1;
+  let COL_QTY = -1, COL_UNIT = -1, COL_LOCATION = -1;
+
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i].toLowerCase().replace(/\s+/g, ' ').trim();
+    if (h.includes('รายการ') && COL_ITEM === -1) COL_ITEM = i;
+    if (h === 'project' && COL_PROJECT === -1) COL_PROJECT = i;
+    if (h === 'status' && COL_STATUS === -1) COL_STATUS = i;
+    if (h === 'qty' && COL_QTY === -1) COL_QTY = i;
+    if ((h === 'unit ( ไทย )' || h === 'unit (ไทย)' || h.includes('unit') && h.includes('ไทย')) && COL_UNIT === -1) COL_UNIT = i;
+    if (h === 'location name' && COL_LOCATION === -1) COL_LOCATION = i;
+  }
+
+  console.log(`Columns: item=${COL_ITEM} project=${COL_PROJECT} status=${COL_STATUS} qty=${COL_QTY} unit=${COL_UNIT} location=${COL_LOCATION}`);
+
+  // fallback ถ้า header map ไม่เจอ
+  if (COL_ITEM === -1) COL_ITEM = 2;
+  if (COL_PROJECT === -1) COL_PROJECT = 4;
+  if (COL_STATUS === -1) COL_STATUS = 16;
+  if (COL_QTY === -1) COL_QTY = 24;
+  if (COL_UNIT === -1) COL_UNIT = 26;
+  if (COL_LOCATION === -1) COL_LOCATION = 31;
 
   const summary = {};
+  let warehouseCount = 0;
+
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
-    if (cols.length < 32) continue;
-    const item     = cols[COL_ITEM];
-    const project  = cols[COL_PROJECT];
-    const status   = cols[COL_STATUS];
+    if (!lines[i].trim()) continue;
+    const cols = parseCSVLine(lines[i]);
+    if (cols.length < Math.max(COL_ITEM, COL_STATUS, COL_QTY, COL_LOCATION) + 1) continue;
+
+    const item     = cols[COL_ITEM] || '';
+    const project  = cols[COL_PROJECT] || '';
+    const status   = cols[COL_STATUS] || '';
     const qty      = parseInt(cols[COL_QTY]) || 0;
-    const unit     = cols[COL_UNIT];
-    const location = cols[COL_LOCATION];
+    const unit     = cols[COL_UNIT] || '';
+    const location = cols[COL_LOCATION] || '';
 
     if (!item || item === 'รายการ') continue;
     if (status !== 'ดี') continue;
-    if (location !== 'Warehouse Ramintra') continue;
+    if (!location.includes('Warehouse')) continue;
     if (qty <= 0) continue;
 
+    warehouseCount++;
+
     let proj = 'อื่นๆ';
-    if (project.includes('7') || project.toLowerCase().includes('eleven') || project.includes('7-11')) proj = '7-Eleven';
+    if (project.includes('7') || project.toLowerCase().includes('eleven')) proj = '7-Eleven';
     else if (project.toLowerCase().includes('airport') || project.toLowerCase().includes('air')) proj = 'Airport';
 
     const clean = item.replace(/_7-11/g,'').replace(/_Air/g,'').replace(/\\/g,'').trim();
@@ -88,6 +126,8 @@ async function getInventory() {
     summary[proj][clean].qty += qty;
     if (unit) summary[proj][clean].unit = unit;
   }
+
+  console.log(`Warehouse items found: ${warehouseCount}, Projects: ${Object.keys(summary)}`);
   return summary;
 }
 
@@ -106,6 +146,8 @@ function smartSearch(summary, userMessage) {
     stopwords.forEach(sw => cleaned = cleaned.replace(new RegExp(sw, 'g'), ' '));
     searchTerms = cleaned.split(/\s+/).filter(k => k.length >= 2);
   }
+
+  console.log('Search terms:', searchTerms);
 
   const results = {};
   for (const [proj, items] of Object.entries(summary)) {
@@ -133,10 +175,10 @@ async function askGemini(userMessage, results) {
   }
 
   const prompt = `คุณคือ AI ผู้ช่วยตอบข้อมูล Warehouse Inventory ของ Plan B Media
-ข้อมูลที่ค้นพบจาก Warehouse:
+ข้อมูลที่ค้นพบ:
 ${inventoryText}
 คำถาม: "${userMessage}"
-กฎ: ตอบสั้น กระชับ ภาษาไทย เป็นกันเอง แสดงผลแยกตาม Project ระบุชื่อสินค้าและจำนวนที่ชัดเจน ห้ามเดาหรือแต่งข้อมูล`;
+ตอบสั้น กระชับ ภาษาไทย เป็นกันเอง แสดงแยกตาม Project ห้ามเดาหรือแต่งข้อมูล`;
 
   const response = await axios.post(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
@@ -165,7 +207,7 @@ app.post('/webhook', async (req, res) => {
     try {
       const summary = await getInventory();
       const results = smartSearch(summary, userMessage);
-      console.log('Found:', Object.keys(results));
+      console.log('Found projects:', Object.keys(results));
       const reply = await askGemini(userMessage, results);
       await replyToLine(replyToken, reply);
     } catch (err) {
