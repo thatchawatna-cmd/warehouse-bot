@@ -46,9 +46,7 @@ async function getSheetData() {
   const lines = response.data.split('\n');
   const headers = parseCSVLine(lines[0]);
 
-  let COL_ITEM=-1, COL_PROJECT=-1, COL_STATUS=-1;
-  let COL_QTY=-1, COL_UNIT=-1, COL_LOCATION=-1, COL_TYPE=-1;
-
+  let COL_ITEM=-1,COL_PROJECT=-1,COL_STATUS=-1,COL_QTY=-1,COL_UNIT=-1,COL_LOCATION=-1,COL_TYPE=-1;
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i].toLowerCase().trim();
     if (h.includes('รายการ') && COL_ITEM===-1) COL_ITEM=i;
@@ -66,39 +64,28 @@ async function getSheetData() {
   if (COL_UNIT===-1) COL_UNIT=26;
   if (COL_LOCATION===-1) COL_LOCATION=31;
 
-  const cols = { COL_ITEM, COL_PROJECT, COL_STATUS, COL_QTY, COL_UNIT, COL_LOCATION, COL_TYPE };
-  return { lines, cols };
+  return { lines, cols: { COL_ITEM,COL_PROJECT,COL_STATUS,COL_QTY,COL_UNIT,COL_LOCATION,COL_TYPE } };
 }
 
-// ดึงข้อมูลสำหรับตอบคำถามสินค้า — Status=ดี + QTY>0 เท่านั้น
 async function getInventoryGood() {
   const { lines, cols } = await getSheetData();
-  const { COL_ITEM, COL_PROJECT, COL_STATUS, COL_QTY, COL_UNIT, COL_LOCATION, COL_TYPE } = cols;
-
+  const { COL_ITEM,COL_PROJECT,COL_STATUS,COL_QTY,COL_UNIT,COL_LOCATION,COL_TYPE } = cols;
   const summary = {};
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
     const row = parseCSVLine(lines[i]);
     if (row.length < Math.max(COL_ITEM,COL_STATUS,COL_QTY,COL_LOCATION)+1) continue;
-
-    const item     = row[COL_ITEM]||'';
-    const project  = row[COL_PROJECT]||'';
-    const status   = row[COL_STATUS]||'';
-    const qty      = parseInt(row[COL_QTY])||0;
-    const unit     = row[COL_UNIT]||'';
-    const location = row[COL_LOCATION]||'';
-    const type     = COL_TYPE>=0?(row[COL_TYPE]||''):'';
-
+    const item=row[COL_ITEM]||'', project=row[COL_PROJECT]||'', status=row[COL_STATUS]||'';
+    const qty=parseInt(row[COL_QTY])||0, unit=row[COL_UNIT]||'';
+    const location=row[COL_LOCATION]||'', type=COL_TYPE>=0?(row[COL_TYPE]||''):'';
     if (!item||item==='รายการ') continue;
-    if (status!=='ดี') continue;                    // เฉพาะ ดี
+    if (status!=='ดี') continue;
     if (!location.includes('Warehouse')) continue;
-    if (qty<=0) continue;                           // เฉพาะ QTY > 0
+    if (qty<=0) continue;
     if (EXCLUDED_KEYWORDS.some(kw=>type.includes(kw)||item.includes(kw))) continue;
-
     let proj='อื่นๆ';
     if (project.includes('7')||project.toLowerCase().includes('eleven')) proj='7-Eleven';
     else if (project.toLowerCase().includes('airport')||project.toLowerCase().includes('air')) proj='Airport';
-
     const clean=item.replace(/_7-11/g,'').replace(/_Air/g,'').replace(/\\/g,'').trim();
     if (!summary[proj]) summary[proj]={};
     if (!summary[proj][clean]) summary[proj][clean]={qty:0,unit:unit||'ชิ้น'};
@@ -108,70 +95,51 @@ async function getInventoryGood() {
   return summary;
 }
 
-// ดึงข้อมูลสำหรับ SKU Summary — ดี+เสีย รวมกัน นับ unique SKU
 async function getInventoryAll() {
   const { lines, cols } = await getSheetData();
-  const { COL_ITEM, COL_PROJECT, COL_STATUS, COL_QTY, COL_UNIT, COL_LOCATION, COL_TYPE } = cols;
-
-  // summary[proj][item] = { totalQty, goodQty, unit }
+  const { COL_ITEM,COL_PROJECT,COL_STATUS,COL_QTY,COL_UNIT,COL_LOCATION,COL_TYPE } = cols;
   const summary = {};
-
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
     const row = parseCSVLine(lines[i]);
     if (row.length < Math.max(COL_ITEM,COL_STATUS,COL_QTY,COL_LOCATION)+1) continue;
-
-    const item     = row[COL_ITEM]||'';
-    const project  = row[COL_PROJECT]||'';
-    const status   = row[COL_STATUS]||'';
-    const qty      = parseInt(row[COL_QTY])||0;
-    const unit     = row[COL_UNIT]||'';
-    const location = row[COL_LOCATION]||'';
-    const type     = COL_TYPE>=0?(row[COL_TYPE]||''):'';
-
+    const item=row[COL_ITEM]||'', project=row[COL_PROJECT]||'', status=row[COL_STATUS]||'';
+    const qty=parseInt(row[COL_QTY])||0, unit=row[COL_UNIT]||'';
+    const location=row[COL_LOCATION]||'', type=COL_TYPE>=0?(row[COL_TYPE]||''):'';
     if (!item||item==='รายการ') continue;
-    if (!location.includes('Warehouse')) continue;  // เฉพาะ Warehouse
-    // ไม่ filter Status — รวมทั้ง ดี และ เสีย
+    if (!location.includes('Warehouse')) continue;
     if (EXCLUDED_KEYWORDS.some(kw=>type.includes(kw)||item.includes(kw))) continue;
-
     let proj='อื่นๆ';
     if (project.includes('7')||project.toLowerCase().includes('eleven')) proj='7-Eleven';
     else if (project.toLowerCase().includes('airport')||project.toLowerCase().includes('air')) proj='Airport';
-
     const clean=item.replace(/_7-11/g,'').replace(/_Air/g,'').replace(/\\/g,'').trim();
     if (!summary[proj]) summary[proj]={};
-    if (!summary[proj][clean]) summary[proj][clean]={totalQty:0, goodQty:0, unit:unit||'ชิ้น'};
-    summary[proj][clean].totalQty += qty;
-    if (status==='ดี') summary[proj][clean].goodQty += qty;
+    if (!summary[proj][clean]) summary[proj][clean]={totalQty:0,goodQty:0,unit:unit||'ชิ้น'};
+    summary[proj][clean].totalQty+=qty;
+    if (status==='ดี') summary[proj][clean].goodQty+=qty;
     if (unit) summary[proj][clean].unit=unit;
   }
   return summary;
 }
 
 function buildSummaryReport(summary) {
-  let totalSKU=0, totalQty=0, totalGoodQty=0;
-  let report = 'สรุปสินค้าใน Warehouse Ramintra\n';
-  report += '─────────────────────\n';
-
-  for (const [proj, items] of Object.entries(summary)) {
-    const projSKU  = Object.keys(items).length;
-    const projQty  = Object.values(items).reduce((s,d)=>s+d.totalQty,0);
-    const projGood = Object.values(items).reduce((s,d)=>s+d.goodQty,0);
-    totalSKU  += projSKU;
-    totalQty  += projQty;
-    totalGoodQty += projGood;
-
-    report += `Project: ${proj}\n`;
-    report += `  SKU: ${projSKU.toLocaleString()} รายการ\n`;
-    report += `  จำนวนทั้งหมด: ${projQty.toLocaleString()} ชิ้น\n`;
-    report += `  พร้อมใช้ (ดี): ${projGood.toLocaleString()} ชิ้น\n\n`;
+  let totalSKU=0,totalQty=0,totalGood=0;
+  let report='สรุปสินค้าใน Warehouse Ramintra\n─────────────────────\n';
+  for (const [proj,items] of Object.entries(summary)) {
+    const sku=Object.keys(items).length;
+    const qty=Object.values(items).reduce((s,d)=>s+d.totalQty,0);
+    const good=Object.values(items).reduce((s,d)=>s+d.goodQty,0);
+    totalSKU+=sku; totalQty+=qty; totalGood+=good;
+    report+=`${proj}\n`;
+    report+=`  SKU: ${sku.toLocaleString()} รายการ\n`;
+    report+=`  จำนวนทั้งหมด: ${qty.toLocaleString()} ชิ้น\n`;
+    report+=`  พร้อมใช้ (ดี): ${good.toLocaleString()} ชิ้น\n\n`;
   }
-
-  report += '─────────────────────\n';
-  report += 'รวมทั้งหมด\n';
-  report += `  SKU: ${totalSKU.toLocaleString()} รายการ\n`;
-  report += `  จำนวนทั้งหมด: ${totalQty.toLocaleString()} ชิ้น\n`;
-  report += `  พร้อมใช้ (ดี): ${totalGoodQty.toLocaleString()} ชิ้น`;
+  report+=`─────────────────────\n`;
+  report+=`รวมทั้งหมด\n`;
+  report+=`  SKU: ${totalSKU.toLocaleString()} รายการ\n`;
+  report+=`  จำนวนทั้งหมด: ${totalQty.toLocaleString()} ชิ้น\n`;
+  report+=`  พร้อมใช้ (ดี): ${totalGood.toLocaleString()} ชิ้น`;
   return report;
 }
 
@@ -199,30 +167,52 @@ function classifyMessage(msg) {
 }
 
 async function askGroq(userMessage, inventoryText) {
-  const prompt = `คุณคือระบบ Warehouse Inventory Bot ของ Plan B Media
+  const prompt = `คุณคือ AI ผู้ช่วยดูแล Warehouse Inventory ของ Plan B Media ที่ฉลาด เป็นกันเอง และเข้าใจภาษาพูดไทย
 
-ข้อมูลสินค้าพร้อมใช้ (สภาพดี, QTY > 0) ใน Warehouse:
+ข้อมูลสินค้าพร้อมใช้ (สภาพดี, QTY > 0) ใน Warehouse Ramintra:
 ${inventoryText}
 
-คำถาม: ${userMessage}
+คำถามจากเจ้าหน้าที่: "${userMessage}"
 
-กฎ:
-- ตอบภาษาไทยธรรมชาติ สั้น กระชับ เป็นกันเอง
-- ห้ามใช้ ** หรือ markdown ใดๆ
-- ตอบตรงๆ ไม่ต้องมีประโยคนำ
-- แสดงผลแยกตาม Project
-- ถ้าถามจำนวนทั้งหมด ให้รวมยอดทุก Project
-- ถ้าพิมพ์ผิดเล็กน้อยให้เข้าใจได้
-- ถ้าไม่พบ ตอบว่า "ไม่พบในคลังครับ รอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ"
-- ห้ามตอบข้อมูลราคา หรืออุปกรณ์สำนักงาน`;
+วิธีตอบ:
+1. เข้าใจความหมายของคำถามก่อน แม้จะพูดแบบภาษาพูดหรือถามกว้างๆ เช่น:
+   - "จอใหญ่สุด" = LFD ขนาดนิ้วมากที่สุดที่มีใน stock
+   - "ของหมดยัง" = เช็คว่า stock เหลืออยู่ไหม
+   - "เหลือเยอะไหม" = บอกจำนวนและประเมินว่ามาก/น้อย
+   - "จอแอร์พอร์ต" = LFD ใน Project Airport
+   - "มีของพอส่งไหม" = บอกจำนวนที่มีอยู่
+   - "ของดีมีเท่าไหร่" = ข้อมูลที่ให้คือของดีทั้งหมดแล้ว
+   - "37" หรือ "37 นิ้ว" = จอ LFD ขนาด 37 นิ้ว
+
+2. Format การตอบ (ใช้แบบนี้เสมอ):
+[emoji ที่เหมาะสม] [ชื่อสินค้าที่ถาม]
+
+[ชื่อ Project]
+- [รายการ]: [จำนวน] [หน่วย]
+- [รายการ]: [จำนวน] [หน่วย]
+
+รวม: [จำนวนรวม] [หน่วย]
+
+3. emoji ที่ใช้:
+   - จอ/monitor = 📺
+   - อุปกรณ์ไฟฟ้า = 🔌
+   - เครื่องมือ = 🔧
+   - ลำโพง = 🔊
+   - อื่นๆ = 📦
+
+4. กฎอื่นๆ:
+   - ห้ามใช้ ** หรือ markdown
+   - ถ้าไม่มีใน Airport ให้ระบุว่า "Airport: ไม่มีในคลัง"
+   - ถ้าหาไม่เจอเลย ตอบว่า "ไม่พบในคลังครับ รอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ"
+   - ห้ามตอบข้อมูลราคาหรืออุปกรณ์สำนักงาน`;
 
   const response = await axios.post(
     'https://api.groq.com/openai/v1/chat/completions',
     {
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 500,
-      temperature: 0.3
+      max_tokens: 600,
+      temperature: 0.2
     },
     { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
   );
@@ -257,7 +247,7 @@ app.post('/webhook', async (req, res) => {
     const msgType = classifyMessage(userMessage);
 
     if (msgType === 'greeting') {
-      await replyToLine(replyToken, 'สวัสดีครับ 👋\nผมคือระบบตรวจสอบสินค้าใน Warehouse Ramintra ครับ\n\nพิมพ์ถามได้เลยครับ เช่น\n- "จอ 37 มีเท่าไหร่"\n- "มีจออะไรบ้าง"\n- "สินค้าทั้งหมดมีกี่ SKU"').catch(()=>{});
+      await replyToLine(replyToken, 'สวัสดีครับ 👋\nผมคือระบบตรวจสอบสินค้าใน Warehouse Ramintra ครับ\n\nพิมพ์ถามได้เลยครับ เช่น\n- "จอ 37 มีเท่าไหร่"\n- "จอใหญ่สุดมีอะไรบ้าง"\n- "สินค้าทั้งหมดมีกี่ SKU"').catch(()=>{});
       continue;
     }
     if (msgType === 'thanks') {
@@ -265,7 +255,7 @@ app.post('/webhook', async (req, res) => {
       continue;
     }
     if (msgType === 'help') {
-      await replyToLine(replyToken, 'ผมช่วยตรวจสอบสินค้าใน Warehouse ได้ครับ 📦\n\nตัวอย่างคำถาม:\n- จอ 46 มีเท่าไหร่\n- มีจออะไรบ้าง\n- ลำโพงเหลือกี่ตัว\n- สินค้าทั้งหมดมีกี่ SKU\n- ของในโกดังทั้งหมดกี่ชิ้น').catch(()=>{});
+      await replyToLine(replyToken, 'ผมช่วยตรวจสอบสินค้าใน Warehouse ได้ครับ 📦\n\nตัวอย่างคำถาม:\n- จอ 46 มีเท่าไหร่\n- จอใหญ่สุดมีอะไรบ้าง\n- ลำโพงเหลือเยอะไหม\n- ของหมดยัง\n- สินค้าทั้งหมดมีกี่ SKU').catch(()=>{});
       continue;
     }
     if (msgType === 'out_of_scope') {
@@ -274,7 +264,6 @@ app.post('/webhook', async (req, res) => {
     }
 
     try {
-      // SKU Summary — ดึงข้อมูลรวมทั้ง ดี+เสีย
       if (msgType === 'summary') {
         const summaryAll = await getInventoryAll();
         const report = buildSummaryReport(summaryAll);
@@ -282,13 +271,11 @@ app.post('/webhook', async (req, res) => {
         continue;
       }
 
-      // ตัวเลขอย่างเดียว → ถามจอ
       let finalMessage = userMessage;
       if (msgType === 'number_only') {
         finalMessage = `จอ ${userMessage} นิ้ว มีเท่าไหร่`;
       }
 
-      // ตอบคำถามสินค้า — เฉพาะ ดี + QTY > 0
       const summaryGood = await getInventoryGood();
       const inventoryText = buildInventoryText(summaryGood);
       const reply = await askGroq(finalMessage, inventoryText);
