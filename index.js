@@ -10,33 +10,106 @@ const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1ug-1X3TFwNXeobmcfoohRqq
 const SHEET_NAME = process.env.SHEET_NAME || 'Warehouse Airport&7-11 media';
 const RENDER_URL = process.env.RENDER_URL || 'https://warehouse-bot-wdp3.onrender.com';
 
+// ============================================================
+// KEEP-ALIVE
+// ============================================================
 setInterval(async () => {
   try { await axios.get(`${RENDER_URL}/ping`); } catch (e) {}
 }, 14 * 60 * 1000);
 
+// ============================================================
+// CONSTANTS
+// ============================================================
 const EXCLUDED_KEYWORDS = [
   'อุปกรณ์และเครื่องใช้สำนักงาน','อุปกรณ์วัสดุสำนักงานใช้ไป',
   'อุปกรณ์วัสดุสิ้นเปลืองใช้ไป','วัสดุสิ้นเปลือง','เครื่องใช้สำนักงาน',
 ];
 
-const GREETINGS    = ['สวัสดี','หวัดดี','hello','hi','ดีจ้า','ดีครับ','ดีค่ะ','เฮ้','hey'];
-const THANKS       = ['ขอบคุณ','ขอบใจ','thanks','thank you','thx'];
-const HELP         = ['ช่วยอะไรได้บ้าง','ทำอะไรได้บ้าง','ใช้งานยังไง','help','วิธีใช้'];
-const OUT_OF_SCOPE = ['ราคา','price','ค่าใช้จ่าย','กินอะไร','อากาศ','ข่าว','weather','เที่ยว'];
+const GREETINGS    = ['สวัสดี','หวัดดี','hello','hi','ดีจ้า','ดีครับ','ดีค่ะ','เฮ้','hey','ดีนะ','ดีด้วย'];
+const THANKS       = ['ขอบคุณ','ขอบใจ','thanks','thank you','thx','ขอบคุณมาก','ขอบใจมาก','โอเค ขอบคุณ'];
+const HELP         = ['ช่วยอะไรได้บ้าง','ทำอะไรได้บ้าง','ใช้งานยังไง','help','วิธีใช้','ถามอะไรได้บ้าง'];
+const OUT_OF_SCOPE = ['ราคา','price','ค่าใช้จ่าย','กินอะไร','อากาศ','ข่าว','weather','เที่ยว','หวย','ดูดวง'];
 const SUMMARY_KEYWORDS = [
   'sku','กี่ sku','กี่รายการ','มีกี่ชนิด','มีกี่ประเภท',
-  'ของในโกดังทั้งหมด','สินค้าทั้งหมด','ทั้งหมดกี่','มีทั้งหมด','รวมทั้งหมด'
+  'ของในโกดังทั้งหมด','สินค้าทั้งหมด','ทั้งหมดกี่','มีทั้งหมด','รวมทั้งหมด',
+  'มีอะไรบ้างทั้งหมด','สรุปสินค้า'
 ];
 
-// Emoji mapping ตามประเภทสินค้า
+// Stopwords — ตัดออกก่อน search
+const STOPWORDS = [
+  'มีเท่าไหร่','เท่าไหร่','มีไหม','เหลือไหม','เหลือเท่าไหร่','มีของ',
+  'เหลือ','มี','ของ','ใน','คลัง','โกดัง','ครับ','ค่ะ','นะ','warehouse',
+  'อยู่','ตอนนี้','ล่าสุด','บ้าง','หน่อย','ด้วย','เลย'
+];
+
+// Alias Map — คำที่ user พิมพ์ → keyword ที่ใช้ search ใน sheet
+const ALIAS_MAP = [
+  // จอ
+  { aliases: ['จอ','monitor','screen','display','lfd'], searchFor: 'lfd' },
+  { aliases: ['จอ 37','37"','37 นิ้ว','37นิ้ว'], searchFor: ['lfd','37'] },
+  { aliases: ['จอ 40','40"','40 นิ้ว','40นิ้ว'], searchFor: ['lfd','40'] },
+  { aliases: ['จอ 43','43"','43 นิ้ว','43นิ้ว'], searchFor: ['lfd','43'] },
+  { aliases: ['จอ 46','46"','46 นิ้ว','46นิ้ว'], searchFor: ['lfd','46'] },
+  { aliases: ['จอ 55','55"','55 นิ้ว','55นิ้ว'], searchFor: ['lfd','55'] },
+  { aliases: ['hkc','จอ hkc'], searchFor: ['lfd','hkc'] },
+  { aliases: ['samsung','ซัมซุง','จอ samsung'], searchFor: ['lfd','samsung'] },
+  // Timer
+  { aliases: ['timer','ไทเมอร์','ไทม์เมอร์','time relay','เวลา'], searchFor: 'timer' },
+  // Magnetic
+  { aliases: ['magnetic','แมกเนติก','แมก','contactor'], searchFor: 'magnetic' },
+  // CB
+  { aliases: ['cb','เบรกเกอร์','circuit breaker','เซอร์กิต'], searchFor: 'cb ' },
+  // RCBO
+  { aliases: ['rcbo','rcd','กันดูด'], searchFor: 'rcbo' },
+  // Bracket / โครงสร้าง
+  { aliases: ['bracket','ขาจอ','ขาแขวน','โครง','rack','แร็ค','ขาเหล็ก'], searchFor: ['โครงสร้าง','bracket','ขาเหล็ก'] },
+  // ลำโพง
+  { aliases: ['ลำโพง','speaker','audio','เสียง'], searchFor: 'ลำโพง' },
+  // Media Player
+  { aliases: ['player','media player','เพลเยอร์','เครื่องเล่น'], searchFor: 'player' },
+  // ปลั๊ก
+  { aliases: ['ปลั๊ก','plug','รางปลั๊ก','ราง'], searchFor: 'ปลั๊ก' },
+  // ผ้า
+  { aliases: ['ผ้า','ไมโครไฟเบอร์','microfiber','ชามัวร์','ผ้าเช็ด'], searchFor: 'ผ้า' },
+  // น้ำยา
+  { aliases: ['น้ำยา','spray','สเปรย์','sc100'], searchFor: 'น้ำยา' },
+  // ซิลิโคน
+  { aliases: ['ซิลิโคน','silicone'], searchFor: 'ซิลิโคน' },
+  // เทป
+  { aliases: ['เทป','tape'], searchFor: 'เทป' },
+  // ฟิล์ม
+  { aliases: ['ฟิล์ม','film'], searchFor: 'ฟิล์ม' },
+  // ไขควง
+  { aliases: ['ไขควง','screwdriver'], searchFor: 'ไขควง' },
+  // คัตเตอร์
+  { aliases: ['คัตเตอร์','cutter'], searchFor: 'คัตเตอร์' },
+  // บันได
+  { aliases: ['บันได','ladder'], searchFor: 'บันได' },
+  // ไฟฉาย
+  { aliases: ['ไฟฉาย','flashlight','torch'], searchFor: 'ไฟฉาย' },
+  // คีม
+  { aliases: ['คีม','plier'], searchFor: 'คีม' },
+  // กล่องเครื่องมือ
+  { aliases: ['กล่องเครื่องมือ','toolbox'], searchFor: 'กล่องเครื่องมือ' },
+  // ป้าย
+  { aliases: ['ป้าย','ไวนิล','vinyl','banner'], searchFor: 'ป้ายไวนิล' },
+  // Logo
+  { aliases: ['logo','โลโก้'], searchFor: 'logo' },
+  // ถุงขยะ
+  { aliases: ['ถุงขยะ','ถุงดำ'], searchFor: 'ถุงขยะ' },
+];
+
+// ============================================================
+// EMOJI HELPERS
+// ============================================================
 function getItemEmoji(name) {
   const n = name.toLowerCase();
-  if (n.includes('lfd') || n.includes('จอ') || n.includes('monitor') || n.includes('screen')) return '📺';
-  if (n.includes('ลำโพง') || n.includes('speaker') || n.includes('audio')) return '🔊';
+  if (n.includes('lfd') || n.includes('จอ')) return '📺';
+  if (n.includes('ลำโพง') || n.includes('speaker')) return '🔊';
   if (n.includes('player') || n.includes('media')) return '🎬';
-  if (n.includes('cb ') || n.includes('rcbo') || n.includes('ไฟฟ้า') || n.includes('plug') || n.includes('ปลั๊ก') || n.includes('timer') || n.includes('circuit')) return '🔌';
+  if (n.includes('magnetic') || n.includes('timer') || n.includes('cb ') || n.includes('rcbo') || n.includes('ปลั๊ก') || n.includes('plug') || n.includes('ไฟฟ้า')) return '🔌';
   if (n.includes('ไขควง') || n.includes('คีม') || n.includes('คัตเตอร์') || n.includes('บันได') || n.includes('ไฟฉาย') || n.includes('เครื่องมือ')) return '🔧';
-  if (n.includes('ผ้า') || n.includes('ไมโคร') || n.includes('ชามัวร์') || n.includes('น้ำยา') || n.includes('ซิลิโคน') || n.includes('เทป') || n.includes('ฟิล์ม')) return '🧴';
+  if (n.includes('ผ้า') || n.includes('น้ำยา') || n.includes('ซิลิโคน') || n.includes('เทป') || n.includes('ฟิล์ม')) return '🧴';
   if (n.includes('โครงสร้าง') || n.includes('ขาเหล็ก') || n.includes('bracket') || n.includes('rack')) return '🔩';
   if (n.includes('ป้าย') || n.includes('ไวนิล') || n.includes('logo')) return '🪧';
   return '📦';
@@ -48,18 +121,21 @@ function getProjEmoji(proj) {
   return '🏭';
 }
 
-function getHeaderEmoji(userMessage) {
-  const m = userMessage.toLowerCase();
-  if (m.includes('จอ') || m.includes('lfd') || m.includes('monitor')) return '📺';
-  if (m.includes('ลำโพง') || m.includes('speaker')) return '🔊';
-  if (m.includes('player')) return '🎬';
-  if (m.includes('ไฟฟ้า') || m.includes('cb') || m.includes('rcbo') || m.includes('ปลั๊ก')) return '🔌';
-  if (m.includes('เครื่องมือ') || m.includes('ไขควง') || m.includes('คีม')) return '🔧';
-  if (m.includes('ผ้า') || m.includes('ไมโคร') || m.includes('น้ำยา')) return '🧴';
-  if (m.includes('โครง') || m.includes('ขาเหล็ก')) return '🔩';
+function getHeaderEmoji(searchTerms) {
+  const s = searchTerms.join(' ').toLowerCase();
+  if (s.includes('lfd') || s.includes('จอ')) return '📺';
+  if (s.includes('ลำโพง')) return '🔊';
+  if (s.includes('player')) return '🎬';
+  if (s.includes('timer') || s.includes('magnetic') || s.includes('cb') || s.includes('rcbo') || s.includes('ปลั๊ก')) return '🔌';
+  if (s.includes('ไขควง') || s.includes('คัตเตอร์') || s.includes('บันได')) return '🔧';
+  if (s.includes('ผ้า') || s.includes('น้ำยา')) return '🧴';
+  if (s.includes('โครงสร้าง') || s.includes('bracket')) return '🔩';
   return '📦';
 }
 
+// ============================================================
+// CSV PARSER
+// ============================================================
 function parseCSVLine(line) {
   const result = []; let current = ''; let inQuotes = false;
   for (let i = 0; i < line.length; i++) {
@@ -71,6 +147,9 @@ function parseCSVLine(line) {
   return result;
 }
 
+// ============================================================
+// SHEET DATA
+// ============================================================
 async function getSheetData() {
   const encodedSheet = encodeURIComponent(SHEET_NAME);
   const url = `https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodedSheet}`;
@@ -99,7 +178,6 @@ async function getSheetData() {
   return { lines, cols: { COL_ITEM,COL_PROJECT,COL_STATUS,COL_QTY,COL_UNIT,COL_LOCATION,COL_TYPE } };
 }
 
-// ดึง inventory ทั้งหมด (ดีเท่านั้น)
 async function getInventoryGood() {
   const { lines, cols } = await getSheetData();
   const { COL_ITEM,COL_PROJECT,COL_STATUS,COL_QTY,COL_UNIT,COL_LOCATION,COL_TYPE } = cols;
@@ -128,7 +206,6 @@ async function getInventoryGood() {
   return summary;
 }
 
-// ดึง inventory รวมทั้ง ดี+เสีย สำหรับ summary
 async function getInventoryAll() {
   const { lines, cols } = await getSheetData();
   const { COL_ITEM,COL_PROJECT,COL_STATUS,COL_QTY,COL_UNIT,COL_LOCATION,COL_TYPE } = cols;
@@ -156,20 +233,40 @@ async function getInventoryAll() {
   return summary;
 }
 
-// ค้นหาและกรองเฉพาะรายการที่เกี่ยวข้อง
-function searchInventory(summary, userMessage) {
-  const msgLower = userMessage.toLowerCase()
-    .replace(/เหลือ|เท่าไหร่|มีไหม|มีเท่าไหร่|ของ|ใน|คลัง|โกดัง|ครับ|ค่ะ|warehouse/g, ' ')
-    .trim();
+// ============================================================
+// SMART SEARCH — เพิ่ม alias + stopword filter
+// ============================================================
+function extractSearchTerms(userMessage) {
+  const msgLower = userMessage.toLowerCase();
 
-  // แยก keyword ที่มีความหมาย
-  const keywords = msgLower.split(/\s+/).filter(k => k.length >= 2);
+  // ① ลอง match alias ก่อน (priority สูงสุด)
+  for (const alias of ALIAS_MAP) {
+    const matched = alias.aliases.some(a => msgLower.includes(a.toLowerCase()));
+    if (matched) {
+      const terms = Array.isArray(alias.searchFor) ? alias.searchFor : [alias.searchFor];
+      return { terms, matched: true };
+    }
+  }
+
+  // ② ไม่เจอ alias — ใช้ keyword จากข้อความ หลังตัด stopwords ออก
+  let cleaned = msgLower;
+  STOPWORDS.forEach(sw => {
+    cleaned = cleaned.replace(new RegExp(sw, 'g'), ' ');
+  });
+  const terms = cleaned.split(/\s+/).filter(k => k.length >= 2);
+  return { terms, matched: false };
+}
+
+function searchInventory(summary, userMessage) {
+  const { terms } = extractSearchTerms(userMessage);
+  if (terms.length === 0) return {};
 
   const results = {};
   for (const [proj, items] of Object.entries(summary)) {
     for (const [name, d] of Object.entries(items)) {
       const nameLower = name.toLowerCase();
-      const matched = keywords.some(kw => nameLower.includes(kw));
+      // OR match — ถ้ามี keyword ใดๆ ตรง ก็แสดง
+      const matched = terms.some(term => nameLower.includes(term.toLowerCase()));
       if (matched) {
         if (!results[proj]) results[proj] = [];
         results[proj].push({ name, qty: d.qty, unit: d.unit });
@@ -179,21 +276,23 @@ function searchInventory(summary, userMessage) {
   return results;
 }
 
-// Format คำตอบสวยงาม (ไม่ผ่าน Groq — ตอบตรงเลย)
+// ============================================================
+// FORMAT REPLY
+// ============================================================
 function formatInventoryReply(userMessage, results) {
-  if (Object.keys(results).length === 0) return null; // ไม่เจอ
+  if (Object.keys(results).length === 0) return null;
 
-  const headerEmoji = getHeaderEmoji(userMessage);
+  const { terms } = extractSearchTerms(userMessage);
+  const headerEmoji = getHeaderEmoji(terms);
 
-  // หาชื่อสั้นๆ จาก keyword
-  const msgLower = userMessage.toLowerCase()
-    .replace(/เหลือ|เท่าไหร่|มีไหม|มีเท่าไหร่|มีของ|มี|ของ|ใน|คลัง|โกดัง|ครับ|ค่ะ/g, '')
-    .trim();
+  // หัวข้อจาก keyword หลัก
+  const mainTerm = terms[0] ? terms[0].charAt(0).toUpperCase() + terms[0].slice(1) : userMessage;
 
-  let reply = `${headerEmoji} ${msgLower}\n`;
+  let reply = `${headerEmoji} ${mainTerm}\n`;
 
   let grandTotal = 0;
   let grandUnit = '';
+  const projCount = Object.keys(results).length;
 
   for (const [proj, items] of Object.entries(results)) {
     const projEmoji = getProjEmoji(proj);
@@ -202,34 +301,29 @@ function formatInventoryReply(userMessage, results) {
     let projTotal = 0;
     for (const item of items) {
       const itemEmoji = getItemEmoji(item.name);
-      // ตัดชื่อให้สั้นลง
       const shortName = item.name
-        .replace(/LFD /g, '').replace(/"/g, '"').trim();
+        .replace(/LFD /gi,'').replace(/"/g,'"').replace(/\\/g,'').trim();
       reply += `${itemEmoji} ${shortName}: ${item.qty} ${item.unit}\n`;
       projTotal += item.qty;
       grandTotal += item.qty;
       if (!grandUnit && item.unit) grandUnit = item.unit;
     }
-
-    // ถ้ามีหลายรายการใน project ให้แสดง subtotal
     if (items.length > 1) {
-      reply += `   รวม ${proj}: ${projTotal} ${grandUnit}\n`;
+      reply += `   └ รวม ${proj}: ${projTotal} ${grandUnit}\n`;
     }
   }
 
-  // Grand total ถ้ามีหลาย project
-  if (Object.keys(results).length > 1) {
-    reply += `\n📊 รวมทั้งหมด: ${grandTotal} ${grandUnit}`;
-  } else if (Object.values(results)[0].length > 1) {
+  if (projCount > 1 || Object.values(results)[0].length > 1) {
     reply += `\n📊 รวมทั้งหมด: ${grandTotal} ${grandUnit}`;
   }
 
   return reply.trim();
 }
 
-// ส่ง Groq เฉพาะเมื่อหา keyword ไม่เจอ หรือคำถามซับซ้อน
-async function askGroqWithFilteredData(userMessage, filteredResults) {
-  // สร้าง inventory text จากที่กรองแล้ว
+// ============================================================
+// GROQ FALLBACK (ส่งเฉพาะข้อมูลที่กรองแล้ว)
+// ============================================================
+async function askGroqFallback(userMessage, filteredResults) {
   let inventoryText = '';
   for (const [proj, items] of Object.entries(filteredResults)) {
     inventoryText += `[${proj}]\n`;
@@ -239,61 +333,61 @@ async function askGroqWithFilteredData(userMessage, filteredResults) {
 
   const prompt = `คุณคือ Warehouse Inventory Bot ของ Plan B Media
 
-สินค้าที่พบ (สภาพดี, อยู่ใน Warehouse):
+สินค้าที่พบ (สภาพดี):
 ${inventoryText}
 
 คำถาม: "${userMessage}"
 
-ตอบตามรูปแบบนี้เสมอ (ห้ามเปลี่ยน format):
-[emoji หัวข้อ] [ชื่อสินค้าที่ถาม]
+ตอบตามรูปแบบนี้:
+[emoji] [หัวข้อ]
 
-[emoji project] [ชื่อ Project]
-[emoji item] [ชื่อสินค้า]: [จำนวน] [หน่วย]
+[emoji project] [Project]
+[emoji] [รายการ]: [จำนวน] [หน่วย]
+   └ รวม [Project]: [รวม] [หน่วย]
 
-📊 รวมทั้งหมด: [จำนวน] [หน่วย]
+📊 รวมทั้งหมด: [รวม] [หน่วย]
 
-กฎ:
-- emoji project: 7-Eleven=🏪, Airport=✈️, อื่นๆ=🏭
-- emoji item: จอ=📺, ลำโพง=🔊, ไฟฟ้า=🔌, เครื่องมือ=🔧, ผ้า/วัสดุ=🧴, โครงสร้าง=🔩, อื่นๆ=📦
-- ห้ามใช้ ** หรือ markdown
-- ตอบสั้น กระชับ ภาษาไทย`;
+emoji: 7-Eleven=🏪, Airport=✈️, จอ=📺, ลำโพง=🔊, ไฟฟ้า=🔌, เครื่องมือ=🔧, ผ้า=🧴, โครง=🔩, อื่นๆ=📦
+ห้ามใช้ ** หรือ markdown ตอบสั้น กระชับ ภาษาไทย`;
 
   const response = await axios.post(
     'https://api.groq.com/openai/v1/chat/completions',
     {
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 400,
-      temperature: 0.2
+      max_tokens: 400, temperature: 0.2
     },
     { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
   );
   return response.data.choices[0].message.content;
 }
 
+// ============================================================
+// SUMMARY REPORT
+// ============================================================
 function buildSummaryReport(summary) {
   let totalSKU=0, totalQty=0, totalGood=0;
-  let report = '📦 สรุปสินค้าใน Warehouse Ramintra\n';
-  report += '─────────────────────\n';
+  let report = '📦 สรุปสินค้าใน Warehouse Ramintra\n─────────────────────\n';
   for (const [proj, items] of Object.entries(summary)) {
     const sku=Object.keys(items).length;
     const qty=Object.values(items).reduce((s,d)=>s+d.totalQty,0);
     const good=Object.values(items).reduce((s,d)=>s+d.goodQty,0);
     totalSKU+=sku; totalQty+=qty; totalGood+=good;
-    const projEmoji = getProjEmoji(proj);
-    report += `\n${projEmoji} ${proj}\n`;
+    report += `\n${getProjEmoji(proj)} ${proj}\n`;
     report += `  SKU: ${sku.toLocaleString()} รายการ\n`;
     report += `  จำนวนทั้งหมด: ${qty.toLocaleString()} ชิ้น\n`;
     report += `  พร้อมใช้ (ดี): ${good.toLocaleString()} ชิ้น\n`;
   }
-  report += '\n─────────────────────\n';
-  report += `📊 รวมทั้งหมด\n`;
+  report += `\n─────────────────────\n📊 รวมทั้งหมด\n`;
   report += `  SKU: ${totalSKU.toLocaleString()} รายการ\n`;
   report += `  จำนวนทั้งหมด: ${totalQty.toLocaleString()} ชิ้น\n`;
   report += `  พร้อมใช้ (ดี): ${totalGood.toLocaleString()} ชิ้น`;
   return report;
 }
 
+// ============================================================
+// MESSAGE CLASSIFIER
+// ============================================================
 function classifyMessage(msg) {
   const m = msg.toLowerCase().trim();
   if (/^\d+$/.test(m)) return 'number_only';
@@ -305,6 +399,9 @@ function classifyMessage(msg) {
   return 'inventory_query';
 }
 
+// ============================================================
+// LINE REPLY
+// ============================================================
 async function replyToLine(replyToken, text) {
   await axios.post(
     'https://api.line.me/v2/bot/message/reply',
@@ -314,6 +411,9 @@ async function replyToLine(replyToken, text) {
   console.log('LINE reply status: 200');
 }
 
+// ============================================================
+// WEBHOOK
+// ============================================================
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   const events = req.body.events || [];
@@ -322,7 +422,9 @@ app.post('/webhook', async (req, res) => {
     const replyToken = event.replyToken;
 
     if (event.message.type !== 'text') {
-      await replyToLine(replyToken, 'ขออภัยครับ รองรับเฉพาะข้อความเท่านั้น\nลองพิมพ์ถามได้เลยครับ เช่น "จอ 37 มีเท่าไหร่"').catch(()=>{});
+      await replyToLine(replyToken,
+        'ขออภัยครับ รองรับเฉพาะข้อความเท่านั้น\nลองพิมพ์ถามได้เลยครับ เช่น "Timer มีเท่าไหร่"'
+      ).catch(()=>{});
       continue;
     }
 
@@ -332,8 +434,11 @@ app.post('/webhook', async (req, res) => {
 
     const msgType = classifyMessage(userMessage);
 
+    // Static responses
     if (msgType === 'greeting') {
-      await replyToLine(replyToken, 'สวัสดีครับ 👋\nผมคือระบบตรวจสอบสินค้าใน Warehouse Ramintra ครับ\n\nพิมพ์ถามได้เลยครับ เช่น\n📺 "จอ 37 มีเท่าไหร่"\n🧴 "ผ้าไมโครไฟเบอร์เหลือไหม"\n📊 "สินค้าทั้งหมดมีกี่ SKU"').catch(()=>{});
+      await replyToLine(replyToken,
+        'สวัสดีครับ 👋\nผมคือระบบตรวจสอบสินค้าใน Warehouse Ramintra ครับ\n\nพิมพ์ถามได้เลย เช่น\n📺 "จอ 37 มีเท่าไหร่"\n🔌 "Timer มีเท่าไหร่"\n🔌 "Magnetic เหลือเท่าไหร่"\n🧴 "ผ้าไมโครไฟเบอร์เหลือไหม"\n📊 "สินค้าทั้งหมดมีกี่ SKU"'
+      ).catch(()=>{});
       continue;
     }
     if (msgType === 'thanks') {
@@ -341,52 +446,60 @@ app.post('/webhook', async (req, res) => {
       continue;
     }
     if (msgType === 'help') {
-      await replyToLine(replyToken, '📦 ผมช่วยตรวจสอบสินค้าใน Warehouse ได้ครับ\n\nตัวอย่างคำถาม:\n📺 จอ 46 มีเท่าไหร่\n🔌 CB 32A มีไหม\n🧴 ผ้าไมโครไฟเบอร์เหลือกี่ผืน\n📊 สินค้าทั้งหมดมีกี่ SKU\n🔍 ของในโกดังทั้งหมดกี่ชิ้น').catch(()=>{});
+      await replyToLine(replyToken,
+        '📦 ผมช่วยตรวจสอบสินค้าใน Warehouse ได้ครับ\n\nตัวอย่างคำถาม:\n📺 จอ 46 มีเท่าไหร่\n🔌 Timer มีเท่าไหร่\n🔌 Magnetic เหลือกี่ตัว\n🔊 ลำโพงเหลือเยอะไหม\n🧴 ผ้าไมโครไฟเบอร์มีไหม\n📊 สินค้าทั้งหมดมีกี่ SKU'
+      ).catch(()=>{});
       continue;
     }
     if (msgType === 'out_of_scope') {
-      await replyToLine(replyToken, 'ขออภัยครับ ผมตอบได้เฉพาะข้อมูลสินค้าใน Warehouse เท่านั้นครับ 😊').catch(()=>{});
+      await replyToLine(replyToken,
+        'ขออภัยครับ ผมตอบได้เฉพาะข้อมูลสินค้าใน Warehouse เท่านั้นครับ 😊'
+      ).catch(()=>{});
       continue;
     }
 
     try {
+      // Summary report
       if (msgType === 'summary') {
         const summaryAll = await getInventoryAll();
-        const report = buildSummaryReport(summaryAll);
-        await replyToLine(replyToken, report);
+        await replyToLine(replyToken, buildSummaryReport(summaryAll));
         continue;
       }
 
+      // ตัวเลขอย่างเดียว → ถามจอ
       let finalMessage = userMessage;
       if (msgType === 'number_only') {
         finalMessage = `จอ ${userMessage} นิ้ว มีเท่าไหร่`;
       }
 
-      // ดึง inventory และกรองเฉพาะที่เกี่ยวข้อง
+      // ดึง inventory + search
       const summaryGood = await getInventoryGood();
       const filtered = searchInventory(summaryGood, finalMessage);
 
       if (Object.keys(filtered).length === 0) {
-        // ไม่พบเลย — ตอบทันทีไม่ส่ง Groq
-        await replyToLine(replyToken, `🔍 ไม่พบ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`);
+        await replyToLine(replyToken,
+          `🔍 ไม่พบ "${userMessage}" ในคลังครับ\n\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏`
+        );
         continue;
       }
 
-      // พบรายการ — format ตอบตรงเลย ไม่ส่ง Groq
+      // Format ตอบตรง — ไม่ผ่าน Groq
       const directReply = formatInventoryReply(finalMessage, filtered);
       if (directReply) {
         await replyToLine(replyToken, directReply);
         continue;
       }
 
-      // fallback — ส่ง Groq เฉพาะกรณีพิเศษ
-      const groqReply = await askGroqWithFilteredData(finalMessage, filtered);
+      // Fallback Groq (เฉพาะกรณีพิเศษ)
+      const groqReply = await askGroqFallback(finalMessage, filtered);
       await replyToLine(replyToken, groqReply);
 
     } catch (err) {
       const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
       console.log('ERROR:', errMsg);
-      await replyToLine(replyToken, 'ขออภัยครับ เกิดข้อผิดพลาด\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏').catch(()=>{});
+      await replyToLine(replyToken,
+        'ขออภัยครับ เกิดข้อผิดพลาด\nรอเจ้าหน้าที่ตรวจสอบสักครู่นะครับ 🙏'
+      ).catch(()=>{});
     }
   }
 });
